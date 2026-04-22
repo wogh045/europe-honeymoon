@@ -17,21 +17,24 @@ def extract_coords_from_url(url):
     if pd.isna(url) or not isinstance(url, str):
         return None, None
     url = unquote(url)
-    # 패턴 1: @위도,경도
     match = re.search(r'@([-+]?\d+\.\d+),([-+]?\d+\.\d+)', url)
     if match:
         return float(match.group(1)), float(match.group(2))
-    # 패턴 2: !3d위도!4d경도
     match = re.search(r'!3d([-+]?\d+\.\d+)!4d([-+]?\d+\.\d+)', url)
     if match:
         return float(match.group(1)), float(match.group(2))
     return None, None
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10) # 테스트를 위해 캐시 시간을 줄였습니다.
 def load_and_process_data(url):
     df = pd.read_csv(url)
-    # 열 이름 공백 제거
     df.columns = df.columns.str.strip()
+    
+    # [핵심 수정] 위도와 경도 열이 아예 없으면 자동으로 생성
+    if "위도" not in df.columns:
+        df["위도"] = None
+    if "경도" not in df.columns:
+        df["경도"] = None
     
     # 좌표 자동 추출 로직
     if "구글맵 링크" in df.columns:
@@ -47,15 +50,19 @@ try:
     df = load_and_process_data(SHEET_URL)
 
     st.title("🇪🇺 2027 유럽 신혼여행 플래너")
-    st.markdown("시트 데이터를 실시간으로 시각화합니다.")
+    
+    if df.empty:
+        st.warning("시트에 데이터가 없습니다. 구글 시트에 내용을 입력해 주세요.")
+        st.stop()
+
+    # 필수 열 확인 ('국가', '도시'는 반드시 있어야 필터링 가능)
+    if "국가" not in df.columns or "도시" not in df.columns:
+        st.error("🚨 시트에 '국가'와 '도시' 열이 반드시 있어야 합니다!")
+        st.write("현재 시트 제목들:", df.columns.tolist())
+        st.stop()
 
     # 사이드바: 필터링
     st.sidebar.header("📍 여행지 탐색")
-    
-    if df.empty:
-        st.warning("시트에 데이터가 없습니다. 국가, 도시, 장소명 등을 입력해 주세요.")
-        st.stop()
-
     countries = sorted(df["국가"].dropna().unique())
     selected_country = st.sidebar.selectbox("1. 국가 선택", countries)
 
@@ -65,12 +72,15 @@ try:
     # 데이터 필터링
     filtered_df = df[(df["국가"] == selected_country) & (df["도시"] == selected_city)]
 
-    # 메인 화면: 지도 및 목록
+    # 메인 화면
     col1, col2 = st.columns([1.5, 1])
 
     with col1:
         st.subheader(f"🗺️ {selected_city} 지도")
-        # 좌표가 있는 데이터만 선별
+        # 숫자로 변환 (에러 방지)
+        filtered_df["위도"] = pd.to_numeric(filtered_df["위도"], errors='coerce')
+        filtered_df["경도"] = pd.to_numeric(filtered_df["경도"], errors='coerce')
+        
         map_data = filtered_df.dropna(subset=["위도", "경도"])
         
         if not map_data.empty:
@@ -85,14 +95,12 @@ try:
                 ).add_to(m)
             st_folium(m, width="100%", height=500)
         else:
-            st.info("💡 구글맵 링크를 입력하면 지도가 활성화됩니다.")
+            st.info("💡 구글맵 링크를 입력하시면 자동으로 좌표를 찾아 지도에 표시합니다.")
 
     with col2:
         st.subheader("📋 장소 목록")
-        # 보기 편하게 주요 열만 표시
         cols_to_show = [c for c in ["장소명", "카테고리", "우선순위", "메모"] if c in filtered_df.columns]
-        st.dataframe(filtered_df[cols_to_show].sort_values(by="우선순위", ascending=False) if "우선순위" in cols_to_show else filtered_df[cols_to_show], 
-                     use_container_width=True, hide_index=True)
+        st.dataframe(filtered_df[cols_to_show], use_container_width=True, hide_index=True)
 
 except Exception as e:
-    st.error(f"연결 중 오류가 발생했습니다: {e}")
+    st.error(f"프로그램 실행 중 오류가 발생했습니다: {e}")
