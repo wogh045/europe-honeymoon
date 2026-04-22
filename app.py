@@ -10,7 +10,7 @@ from streamlit_gsheets import GSheetsConnection
 st.set_page_config(page_title="유럽 신혼여행 플래너 Pro", layout="wide")
 
 # 시트 URL (본인의 시트 URL로 확인 필수)
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1BVAUJ05mVkzgi2dprZ1w60b34YifUlZGxnVehPzO4aE/edit"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit?gid=0#gid=0"
 
 def extract_coords(url):
     """구글맵 URL에서 위도/경도 추출"""
