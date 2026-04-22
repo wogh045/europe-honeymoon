@@ -8,7 +8,7 @@ st.set_page_config(page_title="Honeymoon Planner", layout="wide")
 
 # 1. 구글 시트 연결 (URL에 본인의 시트 주소를 넣으세요)
 # URL 끝부분의 /edit#gid=0 을 /export?format=csv 로 변경해야 합니다.
-SHEET_URL = "https://docs.google.com/spreadsheets/d/본인의_시트_ID/export?format=csv"
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1BVAUJ05mVkzgi2dprZ1w60b34YifUlZGxnVehPzO4aE/export?format=csv"
 
 @st.cache_data(ttl=600) # 10분마다 데이터 새로고침
 def load_data(url):
