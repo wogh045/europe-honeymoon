@@ -3,3 +3,4 @@ pandas
 streamlit-folium
 folium
 st-gsheets-connection
+requests
