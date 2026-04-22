@@ -48,7 +48,7 @@ def extract_coords(url):
 # 데이터 로드
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(spreadsheet=SHEET_URL, ttl=0)
+    df = conn.read(spreadsheet=SHEET_URL, ttl=600)
     df.columns = [str(c).strip() for c in df.columns]
 except Exception as e:
     st.error(f"연결 오류: {e}")
