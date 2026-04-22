@@ -53,4 +53,46 @@ try:
     st.sidebar.header("📍 여행지 탐색")
     
     if df.empty:
-        st.warning("시트에 데이터가 없습니다. 국가, 도시, 장소명 등을 입력해 주세요
+        st.warning("시트에 데이터가 없습니다. 국가, 도시, 장소명 등을 입력해 주세요.")
+        st.stop()
+
+    countries = sorted(df["국가"].dropna().unique())
+    selected_country = st.sidebar.selectbox("1. 국가 선택", countries)
+
+    cities = sorted(df[df["국가"] == selected_country]["도시"].dropna().unique())
+    selected_city = st.sidebar.selectbox("2. 도시 선택", cities)
+
+    # 데이터 필터링
+    filtered_df = df[(df["국가"] == selected_country) & (df["도시"] == selected_city)]
+
+    # 메인 화면: 지도 및 목록
+    col1, col2 = st.columns([1.5, 1])
+
+    with col1:
+        st.subheader(f"🗺️ {selected_city} 지도")
+        # 좌표가 있는 데이터만 선별
+        map_data = filtered_df.dropna(subset=["위도", "경도"])
+        
+        if not map_data.empty:
+            m = folium.Map(location=[map_data["위도"].mean(), map_data["경도"].mean()], zoom_start=13)
+            for _, row in map_data.iterrows():
+                priority = row.get("우선순위", 0)
+                folium.Marker(
+                    [row["위도"], row["경도"]],
+                    popup=row.get("장소명", "Point"),
+                    tooltip=f"{row.get('장소명')} ({row.get('카테고리', '미분류')})",
+                    icon=folium.Icon(color="red" if priority >= 5 else "blue")
+                ).add_to(m)
+            st_folium(m, width="100%", height=500)
+        else:
+            st.info("💡 구글맵 링크를 입력하면 지도가 활성화됩니다.")
+
+    with col2:
+        st.subheader("📋 장소 목록")
+        # 보기 편하게 주요 열만 표시
+        cols_to_show = [c for c in ["장소명", "카테고리", "우선순위", "메모"] if c in filtered_df.columns]
+        st.dataframe(filtered_df[cols_to_show].sort_values(by="우선순위", ascending=False) if "우선순위" in cols_to_show else filtered_df[cols_to_show], 
+                     use_container_width=True, hide_index=True)
+
+except Exception as e:
+    st.error(f"연결 중 오류가 발생했습니다: {e}")
