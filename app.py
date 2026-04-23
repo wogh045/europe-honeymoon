@@ -14,7 +14,7 @@ st.set_page_config(page_title="유럽 신혼여행 플래너 Pro", layout="wide"
 # 연결된 구글 시트 URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-# 주요 국가별 기본 중심 좌표
+# 주요 국가별 기본 중심 좌표 (데이터가 없을 때 예비용)
 COUNTRY_DEFAULT_COORDS = {
     "이탈리아": [41.8719, 12.5674], "프랑스": [46.2276, 2.2137],
     "스위스": [46.8182, 8.2275], "스페인": [40.4637, -3.7492],
@@ -23,11 +23,18 @@ COUNTRY_DEFAULT_COORDS = {
     "포르투갈": [39.3999, -8.2245], "그리스": [39.0742, 21.8243]
 }
 
-# 국가별 국기 이미지 코드
+# [수정사항 10] 한글/영문 모두 지원하는 철벽 국기 코드표
 FLAG_CODES = {
-    "이탈리아": "it", "프랑스": "fr", "스위스": "ch", "스페인": "es",
-    "영국": "gb", "독일": "de", "오스트리아": "at", "체코": "cz",
-    "포르투갈": "pt", "그리스": "gr"
+    "이탈리아": "it", "italy": "it",
+    "프랑스": "fr", "france": "fr",
+    "스위스": "ch", "switzerland": "ch",
+    "스페인": "es", "spain": "es",
+    "영국": "gb", "united kingdom": "gb",
+    "독일": "de", "germany": "de",
+    "오스트리아": "at", "austria": "at",
+    "체코": "cz", "czechia": "cz",
+    "포르투갈": "pt", "portugal": "pt",
+    "그리스": "gr", "greece": "gr"
 }
 
 geolocator = Nominatim(user_agent="honeymoon_planner")
@@ -61,6 +68,7 @@ def extract_coords(url):
 
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
+    # 수정사항 5: Rate Limit 방지를 위해 캐시 유지(ttl=600)
     df = conn.read(spreadsheet=SHEET_URL, ttl=600)
     df.columns = [str(c).strip() for c in df.columns]
 except Exception as e:
@@ -71,7 +79,7 @@ except Exception as e:
 
 st.title("💍 2027 유럽 신혼여행 플래너")
 
-# 최상단: 새로운 여행 도시 추가하기
+# [수정사항 8] 최상단: 새로운 여행 도시 추가하기 (베이스캠프 등록)
 with st.expander("➕ 새로운 여행 도시 추가하기 (국가/도시만 입력)", expanded=False):
     with st.form("add_city_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -93,29 +101,34 @@ with st.expander("➕ 새로운 여행 도시 추가하기 (국가/도시만 입
                         st.cache_data.clear()
                         st.rerun()
                     else:
-                        st.error("도시 위치를 찾을 수 없습니다.")
+                        st.error("도시 위치를 찾을 수 없습니다. 정확한 한글/영문 명칭을 입력해주세요.")
 
 st.divider()
 
 if not df.empty:
+    # [수정사항 6] 화면 분할 비율 2:8 적용
     col_sel, col_edit = st.columns([2, 8])
 
     with col_sel:
         st.subheader("📍 탐색/필터")
         countries = sorted([c for c in df["국가"].dropna().unique() if str(c).strip()])
-        selected_country = st.selectbox("1. 국가 선택", countries)
-        
-        city_list = df[df["국가"] == selected_country]["도시"].dropna().unique()
-        cities = ["전체 보기"] + sorted([c for c in city_list if str(c).strip()])
-        selected_city = st.selectbox("2. 도시 선택", cities)
-        
-        st.write("---")
-        st.markdown("**🔍 카테고리 필터**")
-        categories = ["도시", "관광지", "맛집", "숙소", "교통시설", "기타"]
-        selected_cats = [cat for cat in categories if st.checkbox(cat, value=True)]
+        if countries:
+            selected_country = st.selectbox("1. 국가 선택", countries)
+            
+            city_list = df[df["국가"] == selected_country]["도시"].dropna().unique()
+            cities = ["전체 보기"] + sorted([c for c in city_list if str(c).strip()])
+            selected_city = st.selectbox("2. 도시 선택", cities)
+            
+            st.write("---")
+            st.markdown("**🔍 카테고리 필터**")
+            categories = ["도시", "관광지", "맛집", "숙소", "교통시설", "기타"]
+            selected_cats = [cat for cat in categories if st.checkbox(cat, value=True)]
+        else:
+            st.info("먼저 도시를 추가해주세요.")
+            st.stop()
 
     with col_edit:
-        # 데이터 필터링
+        # 데이터 필터링 (도시 필터 + 카테고리 필터)
         if selected_city == "전체 보기":
             filtered_df = df[df["국가"] == selected_country].copy()
             title_text = f"🗺️ {selected_country} 전체 현황"
@@ -146,12 +159,12 @@ if not df.empty:
             center_lat, center_lon = COUNTRY_DEFAULT_COORDS.get(selected_country, [48.8566, 2.3522])
             zoom = 6
 
-        # 지도 생성 및 마커 커스텀
+        # 지도 생성 및 마커 커스텀 (국기 이미지 & 아이콘)
         m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
         for p in valid_points:
+            # 1. '도시' 카테고리는 확실한 이미지 국기 적용
             if p['cat'] == "도시":
-                # 파이썬이 앞뒤 띄어쓰기를 자동으로 싹둑 잘라내고 비교합니다!
-                clean_country = str(p['country']).strip()
+                clean_country = str(p['country']).strip().lower()
                 country_code = FLAG_CODES.get(clean_country, "")
                 
                 if country_code:
@@ -163,7 +176,8 @@ if not df.empty:
                     '''
                     custom_icon = folium.DivIcon(html=html_content)
                 else:
-                    custom_icon = folium.DivIcon(html='<div style="font-size: 30px; text-shadow: 2px 2px 4px rgba(0,0,0,0.4);">📍</div>')
+                    custom_icon = folium.DivIcon(html='<div style="font-size: 30px;">📍</div>')
+            # 2. 나머지 카테고리는 색상 및 테마 아이콘 적용
             else:
                 color = "red" if p['cat'] == "관광지" else "orange" if p['cat'] == "맛집" else "green" if p['cat'] == "숙소" else "purple" if p['cat'] == "교통시설" else "blue"
                 icon_shape = "camera" if p['cat'] == "관광지" else "cutlery" if p['cat'] == "맛집" else "bed" if p['cat'] == "숙소" else "info-sign"
@@ -176,26 +190,30 @@ if not df.empty:
         
         st_folium(m, width="100%", height=500, key=f"map_{selected_country}_{selected_city}")
 
-        # 지도 하단 실시간 장소 검색
+        # [수정사항 7] 지도 하단 실시간 장소 검색
         st.write("---")
-        st.subheader("🔍 세부 장소 검색 및 등록")
-        search_q = st.text_input("도시 내 명소를 검색하세요", placeholder="예: 피렌체 두오모 성당")
+        st.subheader("🔍 세부 장소 검색 및 빠른 등록")
+        search_q = st.text_input("도시 내 명소를 검색하세요 (예: 피렌체 두오모 성당)", placeholder="검색 후 아래 폼으로 즉시 저장 가능")
         if search_q:
             with st.spinner('위치 찾는 중...'):
                 loc = geolocator.geocode(search_q)
                 if loc:
                     st.success(f"📍 발견: {loc.address}")
-                    with st.form("quick_add"):
-                        q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설"])
-                        if st.form_submit_button("현재 도시에 저장"):
+                    with st.form("quick_add_form"):
+                        q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
+                        if st.form_submit_button("현재 도시에 저장하기"):
                             new_row = pd.DataFrame([{
-                                "국가": selected_country, "도시": selected_city if selected_city != "전체 보기" else "미정",
-                                "장소명": search_q, "구글맵 링크": f"https://www.google.com/maps/search/?api=1&query={loc.latitude},{loc.longitude}",
+                                "국가": selected_country, 
+                                "도시": selected_city if selected_city != "전체 보기" else "미지정",
+                                "장소명": search_q, 
+                                "구글맵 링크": f"https://www.google.com/maps/search/?api=1&query={loc.latitude},{loc.longitude}",
                                 "카테고리": q_cat
                             }])
                             conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
                             st.cache_data.clear()
                             st.rerun()
+                else:
+                    st.warning("장소를 찾을 수 없습니다. 조금 더 구체적으로 검색해보세요.")
 
         st.divider()
         st.subheader("📋 데이터 관리")
@@ -203,6 +221,6 @@ if not df.empty:
         if st.button("💾 변경사항 저장", type="primary", use_container_width=True):
             other = df[~df.index.isin(display_df.index)]
             conn.update(spreadsheet=SHEET_URL, data=pd.concat([other, edited], ignore_index=True))
-            st.success("저장되었습니다!")
+            st.success("시트 저장 완료!")
             st.cache_data.clear()
             st.rerun()
