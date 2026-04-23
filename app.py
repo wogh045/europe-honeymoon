@@ -14,7 +14,7 @@ st.set_page_config(page_title="플래너", layout="wide")
 # 구글 시트 URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_minimal")
+geolocator = Nominatim(user_agent="honeymoon_planner_v12")
 
 # --- 유틸리티 함수 ---
 def get_country_code(name):
@@ -99,15 +99,16 @@ if not df.empty:
         selected_cats = [cat for cat in cats if st.checkbox(cat, value=True)]
 
     with col_edit:
+        # [수정] 줌 레벨 결정 로직
         if selected_country == "유럽 전체 보기":
             filtered_df = df.copy()
-            zoom = 4
+            initial_zoom = 4
         elif selected_city == "전체 보기":
             filtered_df = df[df["국가"] == selected_country].copy()
-            zoom = 6
+            initial_zoom = 6
         else:
             filtered_df = df[(df["국가"] == selected_country) & (df["도시"] == selected_city)].copy()
-            zoom = 12
+            initial_zoom = 13 # 상세 도시 보기 시 줌인
         
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
         st.subheader("🗺️")
@@ -116,7 +117,10 @@ if not df.empty:
         for _, row in display_df.iterrows():
             lat, lon = extract_coords(row.get("구글맵 링크", ""))
             if lat and lon:
-                valid_points.append({'lat': lat, 'lon': lon, 'name': row['장소명'], 'cat': row['카테고리'], 'country': row['국가']})
+                valid_points.append({
+                    'lat': lat, 'lon': lon, 'name': row['장소명'], 
+                    'cat': row['카테고리'], 'country': row['국가'], 'city': row['도시']
+                })
 
         if valid_points:
             c_lat = sum(p['lat'] for p in valid_points) / len(valid_points)
@@ -124,26 +128,37 @@ if not df.empty:
         else:
             c_lat, c_lon = 48.8566, 2.3522
 
-        m = folium.Map(location=[c_lat, c_lon], zoom_start=zoom)
+        m = folium.Map(location=[c_lat, c_lon], zoom_start=initial_zoom)
         
-        # [수정] 카테고리별 이모지 마커 적용
+        # [핵심 수정] 가시성 제어 로직
+        # 줌 레벨이 9 이상이면 '상세 모드', 그 미만이면 '국가 모드'로 간주
+        is_detailed_view = initial_zoom >= 10
+
         for p in valid_points:
             if p['cat'] == "도시":
-                code = get_country_code(p['country'])
-                icon = folium.DivIcon(html=f'<img src="https://flagcdn.com/w40/{code}.png" style="width:32px; border-radius:4px; box-shadow:2px 2px 5px rgba(0,0,0,0.3);">') if code else folium.DivIcon(html='📍')
+                # 도시(국기)는 지도를 멀리서 볼 때(줌 아웃)만 표시하고, 상세 보기(줌 인) 시 숨김
+                if not is_detailed_view:
+                    code = get_country_code(p['country'])
+                    # 크기를 34px로 고정하여 가시성 확보
+                    icon_html = f'<img src="https://flagcdn.com/w40/{code}.png" style="width:34px; border:2px solid white; border-radius:4px; box-shadow:2px 2px 5px rgba(0,0,0,0.3);">' if code else '📍'
+                    icon = folium.DivIcon(html=icon_html)
+                    folium.Marker([p['lat'], p['lon']], tooltip=p['city'], icon=icon).add_to(m)
             else:
-                if p['cat'] == "맛집": emoji = "🥄"
-                elif p['cat'] == "숙소": emoji = "🏠"
-                elif p['cat'] == "교통시설": emoji = "🚆"
-                elif p['cat'] == "관광지": emoji = "📸"
-                else: emoji = "📍"
-                
-                icon = folium.DivIcon(html=f'<div style="font-size:24px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">{emoji}</div>')
-                
-            folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=icon).add_to(m)
+                # 맛집, 숙소 등 세부 장소는 지도를 상세히 볼 때(줌 인)만 표시
+                if is_detailed_view:
+                    if p['cat'] == "맛집": emoji = "🥄"
+                    elif p['cat'] == "숙소": emoji = "🏠"
+                    elif p['cat'] == "교통시설": emoji = "🚆"
+                    elif p['cat'] == "관광지": emoji = "📸"
+                    else: emoji = "📍"
+                    
+                    # 폰트 크기를 28px로 고정하고 테두리를 주어 선명하게 표시
+                    icon_html = f'<div style="font-size:28px; text-shadow: -1px 0 white, 0 1px white, 1px 0 white, 0 -1px white, 2px 2px 4px rgba(0,0,0,0.4);">{emoji}</div>'
+                    icon = folium.DivIcon(html=icon_html)
+                    folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=icon).add_to(m)
         
-        # [수정] 지도 높이 500 -> 700으로 확장
-        st_folium(m, width="100%", height=700, key="map")
+        # [수정] 지도 높이를 750px로 시원하게 확장
+        st_folium(m, width="100%", height=750, key="map")
 
         st.write("---")
         search_q = st.text_input("🔍", placeholder="장소 검색")
@@ -151,9 +166,15 @@ if not df.empty:
             loc = geolocator.geocode(search_q)
             if loc:
                 with st.form("quick_add"):
-                    q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "기타"])
+                    q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
                     if st.form_submit_button("저장"):
-                        new_row = pd.DataFrame([{"국가": selected_country if selected_country != "유럽 전체 보기" else "미정", "도시": selected_city if selected_city != "전체 보기" else "미정", "장소명": search_q, "구글맵 링크": f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}", "카테고리": q_cat}])
+                        new_row = pd.DataFrame([{
+                            "국가": selected_country if selected_country != "유럽 전체 보기" else "미정", 
+                            "도시": selected_city if selected_city != "전체 보기" else "미정", 
+                            "장소명": search_q, 
+                            "구글맵 링크": f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}", 
+                            "카테고리": q_cat
+                        }])
                         conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
                         st.cache_data.clear()
                         st.rerun()
