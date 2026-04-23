@@ -14,7 +14,7 @@ st.set_page_config(page_title="유럽 신혼여행 플래너 Pro", layout="wide"
 # 연결된 구글 시트 URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-# 주요 국가별 기본 중심 좌표 (데이터가 없을 때 예비용)
+# 주요 국가별 기본 중심 좌표
 COUNTRY_DEFAULT_COORDS = {
     "이탈리아": [41.8719, 12.5674], "프랑스": [46.2276, 2.2137],
     "스위스": [46.8182, 8.2275], "스페인": [40.4637, -3.7492],
@@ -23,26 +23,11 @@ COUNTRY_DEFAULT_COORDS = {
     "포르투갈": [39.3999, -8.2245], "그리스": [39.0742, 21.8243]
 }
 
-# [수정사항 10] 한글/영문 모두 지원하는 철벽 국기 코드표
-FLAG_CODES = {
-    "이탈리아": "it", "italy": "it",
-    "프랑스": "fr", "france": "fr",
-    "스위스": "ch", "switzerland": "ch",
-    "스페인": "es", "spain": "es",
-    "영국": "gb", "united kingdom": "gb",
-    "독일": "de", "germany": "de",
-    "오스트리아": "at", "austria": "at",
-    "체코": "cz", "czechia": "cz",
-    "포르투갈": "pt", "portugal": "pt",
-    "그리스": "gr", "greece": "gr"
-}
-
 geolocator = Nominatim(user_agent="honeymoon_planner")
 
 # --- 유틸리티 함수 ---
 
 def get_long_url(short_url):
-    """짧은 구글맵 URL을 긴 URL로 변환"""
     try:
         if "goo.gl" in short_url or "maps.app.goo.gl" in short_url:
             response = requests.head(short_url, allow_redirects=True, timeout=5)
@@ -51,7 +36,6 @@ def get_long_url(short_url):
     except: return short_url
 
 def extract_coords(url):
-    """구글맵 URL에서 위도/경도 추출"""
     if not url or pd.isna(url) or not isinstance(url, str): return None, None
     full_url = unquote(get_long_url(url))
     try:
@@ -68,7 +52,6 @@ def extract_coords(url):
 
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # 수정사항 5: Rate Limit 방지를 위해 캐시 유지(ttl=600)
     df = conn.read(spreadsheet=SHEET_URL, ttl=600)
     df.columns = [str(c).strip() for c in df.columns]
 except Exception as e:
@@ -79,7 +62,7 @@ except Exception as e:
 
 st.title("💍 2027 유럽 신혼여행 플래너")
 
-# [수정사항 8] 최상단: 새로운 여행 도시 추가하기 (베이스캠프 등록)
+# 베이스캠프 추가 영역
 with st.expander("➕ 새로운 여행 도시 추가하기 (국가/도시만 입력)", expanded=False):
     with st.form("add_city_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -106,7 +89,6 @@ with st.expander("➕ 새로운 여행 도시 추가하기 (국가/도시만 입
 st.divider()
 
 if not df.empty:
-    # [수정사항 6] 화면 분할 비율 2:8 적용
     col_sel, col_edit = st.columns([2, 8])
 
     with col_sel:
@@ -128,7 +110,6 @@ if not df.empty:
             st.stop()
 
     with col_edit:
-        # 데이터 필터링 (도시 필터 + 카테고리 필터)
         if selected_city == "전체 보기":
             filtered_df = df[df["국가"] == selected_country].copy()
             title_text = f"🗺️ {selected_country} 전체 현황"
@@ -140,7 +121,6 @@ if not df.empty:
 
         st.subheader(title_text)
         
-        # 지도 데이터 준비
         valid_points = []
         for _, row in display_df.iterrows():
             lat, lon = extract_coords(row.get("구글맵 링크", ""))
@@ -150,7 +130,6 @@ if not df.empty:
                     'cat': row['카테고리'], 'city': row['도시'], 'country': row['국가']
                 })
 
-        # 지도 중심 및 줌 설정
         if valid_points:
             center_lat = sum(p['lat'] for p in valid_points) / len(valid_points)
             center_lon = sum(p['lon'] for p in valid_points) / len(valid_points)
@@ -159,21 +138,20 @@ if not df.empty:
             center_lat, center_lon = COUNTRY_DEFAULT_COORDS.get(selected_country, [48.8566, 2.3522])
             zoom = 6
 
-       # 지도 생성 및 마커 커스텀 (국기 이미지 & 아이콘)
         m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
+        
+        # --- 마커 생성 및 들여쓰기 완벽 정렬 구간 ---
         for p in valid_points:
-            # 1. '도시' 카테고리는 확실한 이미지 국기 적용
             if p['cat'] == "도시":
-                # 모든 공백을 아예 삭제해 버리고 소문자로 만듭니다.
+                # 공백을 싹 지우고 소문자로 변환한 뒤 단어 포함 여부로 철벽 검사
                 raw_country = str(p['country']).lower().replace(" ", "")
                 country_code = ""
                 
-                # '단어 포함' 여부로 초강력 매칭
                 if "이탈리아" in raw_country or "italy" in raw_country: country_code = "it"
                 elif "프랑스" in raw_country or "france" in raw_country: country_code = "fr"
                 elif "스페인" in raw_country or "spain" in raw_country: country_code = "es"
                 elif "스위스" in raw_country or "switzerland" in raw_country: country_code = "ch"
-                elif "영국" in raw_country or "uk" in raw_country: country_code = "gb"
+                elif "영국" in raw_country or "uk" in raw_country or "england" in raw_country: country_code = "gb"
                 elif "독일" in raw_country or "germany" in raw_country: country_code = "de"
                 elif "오스트리아" in raw_country or "austria" in raw_country: country_code = "at"
                 elif "체코" in raw_country or "czech" in raw_country: country_code = "cz"
@@ -189,33 +167,28 @@ if not df.empty:
                     '''
                     custom_icon = folium.DivIcon(html=html_content)
                 else:
-                    # 🚨 매칭 실패 시 원인 파악을 위해 빨간 글씨로 현재 인식된 데이터를 띄웁니다!
+                    # 매칭 실패 시 원인을 찾기 위해 빨간 글씨로 띄움
                     custom_icon = folium.DivIcon(html=f'<div style="font-size: 14px; color: red; font-weight: bold; text-shadow: 1px 1px 2px white;">📍{raw_country}</div>')
             
-            # 2. 나머지 카테고리는 색상 및 테마 아이콘 적용
             else:
                 color = "red" if p['cat'] == "관광지" else "orange" if p['cat'] == "맛집" else "green" if p['cat'] == "숙소" else "purple" if p['cat'] == "교통시설" else "blue"
                 icon_shape = "camera" if p['cat'] == "관광지" else "cutlery" if p['cat'] == "맛집" else "bed" if p['cat'] == "숙소" else "info-sign"
                 custom_icon = folium.Icon(color=color, icon=icon_shape)
 
+            # 들여쓰기 완벽하게 맞춘 folium.Marker
             folium.Marker(
-                [p['lat'], p['lon']], popup=f"({p['city']}) {p['name']}", 
-                tooltip=f"[{p['cat']}] {p['name']}", icon=custom_icon
+                [p['lat'], p['lon']], 
+                popup=f"({p['city']}) {p['name']}", 
+                tooltip=f"[{p['cat']}] {p['name']}", 
+                icon=custom_icon
             ).add_to(m)
+        # --- 마커 구간 끝 ---
         
         st_folium(m, width="100%", height=500, key=f"map_{selected_country}_{selected_city}")
 
-            folium.Marker(
-                [p['lat'], p['lon']], popup=f"({p['city']}) {p['name']}", 
-                tooltip=f"[{p['cat']}] {p['name']}", icon=custom_icon
-            ).add_to(m)
-        
-        st_folium(m, width="100%", height=500, key=f"map_{selected_country}_{selected_city}")
-
-        # [수정사항 7] 지도 하단 실시간 장소 검색
         st.write("---")
         st.subheader("🔍 세부 장소 검색 및 빠른 등록")
-        search_q = st.text_input("도시 내 명소를 검색하세요 (예: 피렌체 두오모 성당)", placeholder="검색 후 아래 폼으로 즉시 저장 가능")
+        search_q = st.text_input("도시 내 명소를 검색하세요 (예: 피렌체 두오모 성당)")
         if search_q:
             with st.spinner('위치 찾는 중...'):
                 loc = geolocator.geocode(search_q)
