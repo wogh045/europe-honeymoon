@@ -15,7 +15,7 @@ st.set_page_config(page_title="플래너", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
 # Geocoder 설정
-geolocator = Nominatim(user_agent="honeymoon_planner_v14")
+geolocator = Nominatim(user_agent="honeymoon_planner_v15")
 
 # 세션 상태 초기화
 if 'search_result' not in st.session_state:
@@ -24,6 +24,23 @@ if 'last_country' not in st.session_state:
     st.session_state.last_country = "유럽 전체 보기"
 if 'last_city' not in st.session_state:
     st.session_state.last_city = "전체 보기"
+
+# [핵심 수정] 신혼여행 주요 도시 절대 좌표 (바다로 빠지는 현상 원천 차단)
+KNOWN_CITIES = {
+    "로마": (41.9028, 12.4964), "파리": (48.8566, 2.3522),
+    "피렌체": (43.7696, 11.2558), "베네치아": (45.4408, 12.3155),
+    "밀라노": (45.4642, 9.1900), "나폴리": (40.8518, 14.2681),
+    "바르셀로나": (41.3851, 2.1734), "마드리드": (40.4168, -3.7038),
+    "세비야": (37.3891, -5.9845), "그라나다": (37.1773, -3.5986),
+    "인터라켄": (46.6863, 7.8632), "취리히": (47.3769, 8.5417),
+    "루체른": (47.0502, 8.3093), "그린델발트": (46.6242, 8.0414),
+    "체르마트": (46.0207, 7.7491), "런던": (51.5074, -0.1278),
+    "뮌헨": (48.1351, 11.5820), "프랑크푸르트": (50.1109, 8.6821),
+    "베를린": (52.5200, 13.4050), "프라하": (50.0755, 14.4378),
+    "비엔나": (48.2082, 16.3738), "빈": (48.2082, 16.3738),
+    "부다페스트": (47.4979, 19.0402), "아테네": (37.9838, 23.7275),
+    "산토리니": (36.3932, 25.4615)
+}
 
 # --- 유틸리티 함수 ---
 def get_country_code(name):
@@ -64,6 +81,22 @@ st.title("💍 플래너")
 
 # 관리 패널
 with st.expander("🗑️ 관리", expanded=False):
+    st.warning("⚠️ 잘못된 도시나 데이터를 개별 삭제할 수 있습니다.")
+    with st.form("delete_specific"):
+        c_del1, c_del2 = st.columns(2)
+        with c_del1: d_country = st.text_input("삭제할 국가 (예: 이탈리아)")
+        with c_del2: d_city = st.text_input("삭제할 도시 (예: 로마)")
+        if st.form_submit_button("해당 도시 삭제"):
+            if d_country and d_city:
+                new_df = df[~((df['국가'] == d_country) & (df['도시'] == d_city))]
+                conn.update(spreadsheet=SHEET_URL, data=new_df)
+                st.success(f"{d_city} 삭제 완료!")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error("국가와 도시를 모두 입력해주세요.")
+                
+    st.write("---")
     if st.button("🚨 전체 데이터 초기화", type="primary"):
         empty_df = pd.DataFrame(columns=["국가", "도시", "장소명", "구글맵 링크", "카테고리", "메모"])
         conn.update(spreadsheet=SHEET_URL, data=empty_df)
@@ -79,13 +112,27 @@ with st.expander("➕ 도시 추가", expanded=True):
         with c2: add_city = st.text_input("도시", placeholder="예: 피렌체")
         if st.form_submit_button("등록", use_container_width=True):
             if add_country and add_city:
-                location = geolocator.geocode(f"{add_city}, {add_country}")
-                if location:
-                    safe_url = f"https://www.google.com/maps?q={location.latitude},{location.longitude}"
-                    new_row = pd.DataFrame([{"국가": add_country.strip(), "도시": add_city.strip(), "장소명": f"{add_city} 중심", "구글맵 링크": safe_url, "카테고리": "도시", "메모": "베이스캠프"}])
+                city_key = add_city.strip()
+                # [핵심 수정] 절대 좌표 사전에 있는 도시라면 검색 없이 바로 100% 정확한 좌표 적용
+                if city_key in KNOWN_CITIES:
+                    lat, lon = KNOWN_CITIES[city_key]
+                    safe_url = f"https://www.google.com/maps?q={lat},{lon}"
+                    new_row = pd.DataFrame([{"국가": add_country.strip(), "도시": city_key, "장소명": f"{city_key} 중심", "구글맵 링크": safe_url, "카테고리": "도시", "메모": "베이스캠프"}])
                     conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
                     st.cache_data.clear()
                     st.rerun()
+                else:
+                    # 사전에 없는 도시는 기존처럼 검색 엔진 사용
+                    with st.spinner(f'{add_city} 좌표 찾는 중...'):
+                        location = geolocator.geocode(f"{add_city}, {add_country}")
+                        if location:
+                            safe_url = f"https://www.google.com/maps?q={location.latitude},{location.longitude}"
+                            new_row = pd.DataFrame([{"국가": add_country.strip(), "도시": city_key, "장소명": f"{city_key} 중심", "구글맵 링크": safe_url, "카테고리": "도시", "메모": "베이스캠프"}])
+                            conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("위치를 찾을 수 없습니다. 정확한 명칭을 입력해주세요.")
 
 st.divider()
 
@@ -97,7 +144,6 @@ if not df.empty:
         countries = ["유럽 전체 보기"] + sorted([c for c in df["국가"].dropna().unique() if str(c).strip()])
         selected_country = st.selectbox("국가", countries)
         
-        # [수정] 국가가 바뀌면 검색 결과 초기화
         if selected_country != st.session_state.last_country:
             st.session_state.search_result = None
             st.session_state.last_country = selected_country
@@ -109,7 +155,6 @@ if not df.empty:
             cities = ["전체 보기"] + sorted([c for c in city_list if str(c).strip()])
             selected_city = st.selectbox("도시", cities)
             
-            # [수정] 도시가 바뀌면 검색 결과 초기화
             if selected_city != st.session_state.last_city:
                 st.session_state.search_result = None
                 st.session_state.last_city = selected_city
@@ -119,7 +164,6 @@ if not df.empty:
         selected_cats = [cat for cat in cats if st.checkbox(cat, value=True)]
 
     with col_edit:
-        # 기본 줌 설정
         if selected_country == "유럽 전체 보기":
             filtered_df = df.copy()
             initial_zoom = 4
@@ -132,21 +176,21 @@ if not df.empty:
         
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
         
-        # 검색창
-        search_q = st.text_input("🔍", placeholder="장소 검색")
+        search_q = st.text_input("🔍", placeholder="장소 검색 (검색 후 엔터)")
         if search_q:
-            loc = geolocator.geocode(search_q)
-            if loc:
-                st.session_state.search_result = {
-                    'lat': loc.latitude, 'lon': loc.longitude, 
-                    'name': search_q, 'address': loc.address
-                }
-                initial_zoom = 16
-            else:
-                st.session_state.search_result = None
-                st.warning("❌ 장소를 찾을 수 없습니다.")
+            with st.spinner('🔍 검색 중...'):
+                loc = geolocator.geocode(search_q)
+                if loc:
+                    st.session_state.search_result = {
+                        'lat': loc.latitude, 'lon': loc.longitude, 
+                        'name': search_q, 'address': loc.address
+                    }
+                    initial_zoom = 16
+                else:
+                    st.session_state.search_result = None
+                    st.warning("❌ 장소를 찾을 수 없습니다.")
 
-        st.subheader("🗺️")
+        # [요청사항] 지도 위 이모지 삭제 완료
         
         valid_points = []
         for _, row in display_df.iterrows():
@@ -154,7 +198,6 @@ if not df.empty:
             if lat and lon:
                 valid_points.append({'lat': lat, 'lon': lon, 'name': row['장소명'], 'cat': row['카테고리'], 'country': row['국가'], 'city': row['도시']})
 
-        # [수정] 중심점 결정 로직 (동적 동기화 강화)
         if st.session_state.search_result:
             c_lat = st.session_state.search_result['lat']
             c_lon = st.session_state.search_result['lon']
@@ -188,7 +231,7 @@ if not df.empty:
             res = st.session_state.search_result
             folium.Marker([res['lat'], res['lon']], tooltip="검색 결과", icon=folium.DivIcon(html=f'<div style="font-size:40px; filter: drop-shadow(0 0 5px red);">📍</div>')).add_to(m)
         
-        st_folium(m, width="100%", height=750, key=f"map_{selected_country}_{selected_city}") # 키에 선택값 포함하여 강제 갱신
+        st_folium(m, width="100%", height=750, key=f"map_{selected_country}_{selected_city}")
 
         if st.session_state.search_result:
             with st.form("quick_add_form"):
