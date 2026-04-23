@@ -15,11 +15,15 @@ st.set_page_config(page_title="플래너", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
 # Geocoder 설정
-geolocator = Nominatim(user_agent="honeymoon_planner_v13")
+geolocator = Nominatim(user_agent="honeymoon_planner_v14")
 
-# 세션 상태 초기화 (검색 결과 유지용)
+# 세션 상태 초기화
 if 'search_result' not in st.session_state:
     st.session_state.search_result = None
+if 'last_country' not in st.session_state:
+    st.session_state.last_country = "유럽 전체 보기"
+if 'last_city' not in st.session_state:
+    st.session_state.last_city = "전체 보기"
 
 # --- 유틸리티 함수 ---
 def get_country_code(name):
@@ -93,12 +97,22 @@ if not df.empty:
         countries = ["유럽 전체 보기"] + sorted([c for c in df["국가"].dropna().unique() if str(c).strip()])
         selected_country = st.selectbox("국가", countries)
         
+        # [수정] 국가가 바뀌면 검색 결과 초기화
+        if selected_country != st.session_state.last_country:
+            st.session_state.search_result = None
+            st.session_state.last_country = selected_country
+        
         if selected_country == "유럽 전체 보기":
             selected_city = "전체 보기"
         else:
             city_list = df[df["국가"] == selected_country]["도시"].dropna().unique()
             cities = ["전체 보기"] + sorted([c for c in city_list if str(c).strip()])
             selected_city = st.selectbox("도시", cities)
+            
+            # [수정] 도시가 바뀌면 검색 결과 초기화
+            if selected_city != st.session_state.last_city:
+                st.session_state.search_result = None
+                st.session_state.last_city = selected_city
         
         st.write("---")
         cats = ["도시", "관광지", "맛집", "숙소", "교통시설", "기타"]
@@ -118,34 +132,29 @@ if not df.empty:
         
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
         
-        # [검색 기능 로직]
-        st.write("---")
-        search_q = st.text_input("🔍", placeholder="장소 검색 (검색 후 엔터)")
-        
+        # 검색창
+        search_q = st.text_input("🔍", placeholder="장소 검색")
         if search_q:
-            with st.spinner('🔍 검색 중...'):
-                loc = geolocator.geocode(search_q)
-                if loc:
-                    st.session_state.search_result = {
-                        'lat': loc.latitude, 'lon': loc.longitude, 
-                        'name': search_q, 'address': loc.address
-                    }
-                    st.success(f"✔️ 발견: {loc.address[:60]}...")
-                    initial_zoom = 16 # 찾으면 줌인
-                else:
-                    st.session_state.search_result = None
-                    st.warning("❌ 해당 장소를 찾을 수 없습니다.")
+            loc = geolocator.geocode(search_q)
+            if loc:
+                st.session_state.search_result = {
+                    'lat': loc.latitude, 'lon': loc.longitude, 
+                    'name': search_q, 'address': loc.address
+                }
+                initial_zoom = 16
+            else:
+                st.session_state.search_result = None
+                st.warning("❌ 장소를 찾을 수 없습니다.")
 
         st.subheader("🗺️")
         
-        # 좌표 데이터 준비
         valid_points = []
         for _, row in display_df.iterrows():
             lat, lon = extract_coords(row.get("구글맵 링크", ""))
             if lat and lon:
                 valid_points.append({'lat': lat, 'lon': lon, 'name': row['장소명'], 'cat': row['카테고리'], 'country': row['국가'], 'city': row['도시']})
 
-        # 지도 중심 결정 (검색 결과가 있으면 우선순위)
+        # [수정] 중심점 결정 로직 (동적 동기화 강화)
         if st.session_state.search_result:
             c_lat = st.session_state.search_result['lat']
             c_lon = st.session_state.search_result['lon']
@@ -157,10 +166,8 @@ if not df.empty:
 
         m = folium.Map(location=[c_lat, c_lon], zoom_start=initial_zoom)
         
-        # 가시성 판단 (줌 레벨 10 이상일 때만 상세 장소 노출)
         is_detailed = initial_zoom >= 10
 
-        # 저장된 마커 그리기
         for p in valid_points:
             if p['cat'] == "도시":
                 if not is_detailed:
@@ -174,35 +181,22 @@ if not df.empty:
                     elif p['cat'] == "교통시설": emj = "🚆"
                     elif p['cat'] == "관광지": emj = "📸"
                     else: emj = "📍"
-                    # 크기 고정 및 그림자 보강 (글자 외곽선 효과)
                     icon_html = f'<div style="font-size:32px; filter: drop-shadow(2px 2px 2px rgba(0,0,0,0.5)); text-shadow: -2px 0 white, 0 2px white, 2px 0 white, 0 -2px white;">{emj}</div>'
                     folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=folium.DivIcon(html=icon_html)).add_to(m)
         
-        # 검색된 장소 임시 마커 표시
         if st.session_state.search_result:
             res = st.session_state.search_result
-            folium.Marker(
-                [res['lat'], res['lon']], 
-                tooltip="검색된 장소", 
-                icon=folium.DivIcon(html=f'<div style="font-size:40px; filter: drop-shadow(0 0 5px red);">📍</div>')
-            ).add_to(m)
+            folium.Marker([res['lat'], res['lon']], tooltip="검색 결과", icon=folium.DivIcon(html=f'<div style="font-size:40px; filter: drop-shadow(0 0 5px red);">📍</div>')).add_to(m)
         
-        st_folium(m, width="100%", height=750, key="map")
+        st_folium(m, width="100%", height=750, key=f"map_{selected_country}_{selected_city}") # 키에 선택값 포함하여 강제 갱신
 
-        # 저장 폼 (검색 결과가 있을 때만 등장)
         if st.session_state.search_result:
             with st.form("quick_add_form"):
-                st.write(f"💾 **'{st.session_state.search_result['name']}'** 장소를 저장하시겠습니까?")
+                st.write(f"💾 **{st.session_state.search_result['name']}** 저장")
                 q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
                 if st.form_submit_button("현재 도시에 저장"):
                     res = st.session_state.search_result
-                    new_row = pd.DataFrame([{
-                        "국가": selected_country if selected_country != "유럽 전체 보기" else "미정", 
-                        "도시": selected_city if selected_city != "전체 보기" else "미정", 
-                        "장소명": res['name'], 
-                        "구글맵 링크": f"https://www.google.com/maps?q={res['lat']},{res['lon']}", 
-                        "카테고리": q_cat
-                    }])
+                    new_row = pd.DataFrame([{"국가": selected_country if selected_country != "유럽 전체 보기" else "미정", "도시": selected_city if selected_city != "전체 보기" else "미정", "장소명": res['name'], "구글맵 링크": f"https://www.google.com/maps?q={res['lat']},{res['lon']}", "카테고리": q_cat}])
                     conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
                     st.session_state.search_result = None
                     st.cache_data.clear()
@@ -211,7 +205,7 @@ if not df.empty:
         st.divider()
         st.subheader("📋")
         edited = st.data_editor(display_df, use_container_width=True, hide_index=True, num_rows="dynamic")
-        if st.button("💾 변경사항 저장", type="primary", use_container_width=True):
+        if st.button("💾 저장", type="primary", use_container_width=True):
             other = df[~df.index.isin(display_df.index)]
             conn.update(spreadsheet=SHEET_URL, data=pd.concat([other, edited], ignore_index=True))
             st.cache_data.clear()
