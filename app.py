@@ -14,7 +14,12 @@ st.set_page_config(page_title="플래너", layout="wide")
 # 구글 시트 URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v12")
+# Geocoder 설정
+geolocator = Nominatim(user_agent="honeymoon_planner_v13")
+
+# 세션 상태 초기화 (검색 결과 유지용)
+if 'search_result' not in st.session_state:
+    st.session_state.search_result = None
 
 # --- 유틸리티 함수 ---
 def get_country_code(name):
@@ -58,6 +63,7 @@ with st.expander("🗑️ 관리", expanded=False):
     if st.button("🚨 전체 데이터 초기화", type="primary"):
         empty_df = pd.DataFrame(columns=["국가", "도시", "장소명", "구글맵 링크", "카테고리", "메모"])
         conn.update(spreadsheet=SHEET_URL, data=empty_df)
+        st.session_state.search_result = None
         st.cache_data.clear()
         st.rerun()
 
@@ -99,7 +105,7 @@ if not df.empty:
         selected_cats = [cat for cat in cats if st.checkbox(cat, value=True)]
 
     with col_edit:
-        # [수정] 줌 레벨 결정 로직
+        # 기본 줌 설정
         if selected_country == "유럽 전체 보기":
             filtered_df = df.copy()
             initial_zoom = 4
@@ -108,21 +114,42 @@ if not df.empty:
             initial_zoom = 6
         else:
             filtered_df = df[(df["국가"] == selected_country) & (df["도시"] == selected_city)].copy()
-            initial_zoom = 13 # 상세 도시 보기 시 줌인
+            initial_zoom = 13
         
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
+        
+        # [검색 기능 로직]
+        st.write("---")
+        search_q = st.text_input("🔍", placeholder="장소 검색 (검색 후 엔터)")
+        
+        if search_q:
+            with st.spinner('🔍 검색 중...'):
+                loc = geolocator.geocode(search_q)
+                if loc:
+                    st.session_state.search_result = {
+                        'lat': loc.latitude, 'lon': loc.longitude, 
+                        'name': search_q, 'address': loc.address
+                    }
+                    st.success(f"✔️ 발견: {loc.address[:60]}...")
+                    initial_zoom = 16 # 찾으면 줌인
+                else:
+                    st.session_state.search_result = None
+                    st.warning("❌ 해당 장소를 찾을 수 없습니다.")
+
         st.subheader("🗺️")
         
+        # 좌표 데이터 준비
         valid_points = []
         for _, row in display_df.iterrows():
             lat, lon = extract_coords(row.get("구글맵 링크", ""))
             if lat and lon:
-                valid_points.append({
-                    'lat': lat, 'lon': lon, 'name': row['장소명'], 
-                    'cat': row['카테고리'], 'country': row['국가'], 'city': row['도시']
-                })
+                valid_points.append({'lat': lat, 'lon': lon, 'name': row['장소명'], 'cat': row['카테고리'], 'country': row['국가'], 'city': row['도시']})
 
-        if valid_points:
+        # 지도 중심 결정 (검색 결과가 있으면 우선순위)
+        if st.session_state.search_result:
+            c_lat = st.session_state.search_result['lat']
+            c_lon = st.session_state.search_result['lon']
+        elif valid_points:
             c_lat = sum(p['lat'] for p in valid_points) / len(valid_points)
             c_lon = sum(p['lon'] for p in valid_points) / len(valid_points)
         else:
@@ -130,59 +157,61 @@ if not df.empty:
 
         m = folium.Map(location=[c_lat, c_lon], zoom_start=initial_zoom)
         
-        # [핵심 수정] 가시성 제어 로직
-        # 줌 레벨이 9 이상이면 '상세 모드', 그 미만이면 '국가 모드'로 간주
-        is_detailed_view = initial_zoom >= 10
+        # 가시성 판단 (줌 레벨 10 이상일 때만 상세 장소 노출)
+        is_detailed = initial_zoom >= 10
 
+        # 저장된 마커 그리기
         for p in valid_points:
             if p['cat'] == "도시":
-                # 도시(국기)는 지도를 멀리서 볼 때(줌 아웃)만 표시하고, 상세 보기(줌 인) 시 숨김
-                if not is_detailed_view:
+                if not is_detailed:
                     code = get_country_code(p['country'])
-                    # 크기를 34px로 고정하여 가시성 확보
                     icon_html = f'<img src="https://flagcdn.com/w40/{code}.png" style="width:34px; border:2px solid white; border-radius:4px; box-shadow:2px 2px 5px rgba(0,0,0,0.3);">' if code else '📍'
-                    icon = folium.DivIcon(html=icon_html)
-                    folium.Marker([p['lat'], p['lon']], tooltip=p['city'], icon=icon).add_to(m)
+                    folium.Marker([p['lat'], p['lon']], tooltip=p['city'], icon=folium.DivIcon(html=icon_html)).add_to(m)
             else:
-                # 맛집, 숙소 등 세부 장소는 지도를 상세히 볼 때(줌 인)만 표시
-                if is_detailed_view:
-                    if p['cat'] == "맛집": emoji = "🥄"
-                    elif p['cat'] == "숙소": emoji = "🏠"
-                    elif p['cat'] == "교통시설": emoji = "🚆"
-                    elif p['cat'] == "관광지": emoji = "📸"
-                    else: emoji = "📍"
-                    
-                    # 폰트 크기를 28px로 고정하고 테두리를 주어 선명하게 표시
-                    icon_html = f'<div style="font-size:28px; text-shadow: -1px 0 white, 0 1px white, 1px 0 white, 0 -1px white, 2px 2px 4px rgba(0,0,0,0.4);">{emoji}</div>'
-                    icon = folium.DivIcon(html=icon_html)
-                    folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=icon).add_to(m)
+                if is_detailed:
+                    if p['cat'] == "맛집": emj = "🥄"
+                    elif p['cat'] == "숙소": emj = "🏠"
+                    elif p['cat'] == "교통시설": emj = "🚆"
+                    elif p['cat'] == "관광지": emj = "📸"
+                    else: emj = "📍"
+                    # 크기 고정 및 그림자 보강 (글자 외곽선 효과)
+                    icon_html = f'<div style="font-size:32px; filter: drop-shadow(2px 2px 2px rgba(0,0,0,0.5)); text-shadow: -2px 0 white, 0 2px white, 2px 0 white, 0 -2px white;">{emj}</div>'
+                    folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=folium.DivIcon(html=icon_html)).add_to(m)
         
-        # [수정] 지도 높이를 750px로 시원하게 확장
+        # 검색된 장소 임시 마커 표시
+        if st.session_state.search_result:
+            res = st.session_state.search_result
+            folium.Marker(
+                [res['lat'], res['lon']], 
+                tooltip="검색된 장소", 
+                icon=folium.DivIcon(html=f'<div style="font-size:40px; filter: drop-shadow(0 0 5px red);">📍</div>')
+            ).add_to(m)
+        
         st_folium(m, width="100%", height=750, key="map")
 
-        st.write("---")
-        search_q = st.text_input("🔍", placeholder="장소 검색")
-        if search_q:
-            loc = geolocator.geocode(search_q)
-            if loc:
-                with st.form("quick_add"):
-                    q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
-                    if st.form_submit_button("저장"):
-                        new_row = pd.DataFrame([{
-                            "국가": selected_country if selected_country != "유럽 전체 보기" else "미정", 
-                            "도시": selected_city if selected_city != "전체 보기" else "미정", 
-                            "장소명": search_q, 
-                            "구글맵 링크": f"https://www.google.com/maps?q={loc.latitude},{loc.longitude}", 
-                            "카테고리": q_cat
-                        }])
-                        conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
-                        st.cache_data.clear()
-                        st.rerun()
+        # 저장 폼 (검색 결과가 있을 때만 등장)
+        if st.session_state.search_result:
+            with st.form("quick_add_form"):
+                st.write(f"💾 **'{st.session_state.search_result['name']}'** 장소를 저장하시겠습니까?")
+                q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
+                if st.form_submit_button("현재 도시에 저장"):
+                    res = st.session_state.search_result
+                    new_row = pd.DataFrame([{
+                        "국가": selected_country if selected_country != "유럽 전체 보기" else "미정", 
+                        "도시": selected_city if selected_city != "전체 보기" else "미정", 
+                        "장소명": res['name'], 
+                        "구글맵 링크": f"https://www.google.com/maps?q={res['lat']},{res['lon']}", 
+                        "카테고리": q_cat
+                    }])
+                    conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
+                    st.session_state.search_result = None
+                    st.cache_data.clear()
+                    st.rerun()
 
         st.divider()
         st.subheader("📋")
         edited = st.data_editor(display_df, use_container_width=True, hide_index=True, num_rows="dynamic")
-        if st.button("💾 저장", type="primary", use_container_width=True):
+        if st.button("💾 변경사항 저장", type="primary", use_container_width=True):
             other = df[~df.index.isin(display_df.index)]
             conn.update(spreadsheet=SHEET_URL, data=pd.concat([other, edited], ignore_index=True))
             st.cache_data.clear()
