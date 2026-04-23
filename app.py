@@ -8,13 +8,10 @@ from urllib.parse import unquote
 from streamlit_gsheets import GSheetsConnection
 from geopy.geocoders import Nominatim
 
-# 1. 페이지 설정 및 레이아웃
 st.set_page_config(page_title="유럽 신혼여행 플래너 Pro", layout="wide")
 
-# 연결된 구글 시트 URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-# 주요 국가별 기본 중심 좌표
 COUNTRY_DEFAULT_COORDS = {
     "이탈리아": [41.8719, 12.5674], "프랑스": [46.2276, 2.2137],
     "스위스": [46.8182, 8.2275], "스페인": [40.4637, -3.7492],
@@ -24,8 +21,6 @@ COUNTRY_DEFAULT_COORDS = {
 }
 
 geolocator = Nominatim(user_agent="honeymoon_planner")
-
-# --- 유틸리티 함수 ---
 
 def get_long_url(short_url):
     try:
@@ -48,8 +43,6 @@ def extract_coords(url):
     except: pass
     return None, None
 
-# --- 데이터 연결부 ---
-
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
     df = conn.read(spreadsheet=SHEET_URL, ttl=600)
@@ -58,11 +51,14 @@ except Exception as e:
     st.error(f"구글 시트 연결 오류: {e}")
     st.stop()
 
-# --- 메인 UI 영역 ---
-
+# --- UI 영역 ---
 st.title("💍 2027 유럽 신혼여행 플래너")
 
-# 베이스캠프 추가 영역
+# 🚨 [추가됨] 캐시 강제 삭제 버튼 (데이터가 꼬였을 때 누르세요)
+if st.button("🔄 구글 시트 데이터 강제 새로고침 (국기 안 뜰 때 클릭!)", type="primary"):
+    st.cache_data.clear()
+    st.rerun()
+
 with st.expander("➕ 새로운 여행 도시 추가하기 (국가/도시만 입력)", expanded=False):
     with st.form("add_city_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -83,8 +79,6 @@ with st.expander("➕ 새로운 여행 도시 추가하기 (국가/도시만 입
                         st.success(f"✔️ {add_city} 등록 완료!")
                         st.cache_data.clear()
                         st.rerun()
-                    else:
-                        st.error("도시 위치를 찾을 수 없습니다. 정확한 한글/영문 명칭을 입력해주세요.")
 
 st.divider()
 
@@ -118,7 +112,6 @@ if not df.empty:
             title_text = f"🗺️ {selected_city} 상세 정보"
         
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
-
         st.subheader(title_text)
         
         valid_points = []
@@ -140,11 +133,10 @@ if not df.empty:
 
         m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
         
-        # --- 마커 생성 및 들여쓰기 완벽 정렬 구간 ---
         for p in valid_points:
             if p['cat'] == "도시":
-                # 공백을 싹 지우고 소문자로 변환한 뒤 단어 포함 여부로 철벽 검사
-                raw_country = str(p['country']).lower().replace(" ", "")
+                # 🚨 정규식으로 모든 종류의 공백/보이지 않는 문자 완벽 제거
+                raw_country = re.sub(r'\s+', '', str(p['country']).lower())
                 country_code = ""
                 
                 if "이탈리아" in raw_country or "italy" in raw_country: country_code = "it"
@@ -167,50 +159,27 @@ if not df.empty:
                     '''
                     custom_icon = folium.DivIcon(html=html_content)
                 else:
-                    # 매칭 실패 시 원인을 찾기 위해 빨간 글씨로 띄움
-                    custom_icon = folium.DivIcon(html=f'<div style="font-size: 14px; color: red; font-weight: bold; text-shadow: 1px 1px 2px white;">📍{raw_country}</div>')
+                    # 🚨 매칭 실패 시 원인을 찾기 위한 크고 붉은 에러 박스
+                    error_html = f'''
+                        <div style="background: white; border: 2px solid red; border-radius: 4px; padding: 4px; font-size: 12px; font-weight: bold; color: red; text-align: center;">
+                            🚨인식오류<br>[{p['country']}]
+                        </div>
+                    '''
+                    custom_icon = folium.DivIcon(html=error_html)
             
             else:
                 color = "red" if p['cat'] == "관광지" else "orange" if p['cat'] == "맛집" else "green" if p['cat'] == "숙소" else "purple" if p['cat'] == "교통시설" else "blue"
                 icon_shape = "camera" if p['cat'] == "관광지" else "cutlery" if p['cat'] == "맛집" else "bed" if p['cat'] == "숙소" else "info-sign"
                 custom_icon = folium.Icon(color=color, icon=icon_shape)
 
-            # 들여쓰기 완벽하게 맞춘 folium.Marker
             folium.Marker(
-                [p['lat'], p['lon']], 
-                popup=f"({p['city']}) {p['name']}", 
-                tooltip=f"[{p['cat']}] {p['name']}", 
-                icon=custom_icon
+                [p['lat'], p['lon']], popup=f"({p['city']}) {p['name']}", 
+                tooltip=f"[{p['cat']}] {p['name']}", icon=custom_icon
             ).add_to(m)
-        # --- 마커 구간 끝 ---
         
         st_folium(m, width="100%", height=500, key=f"map_{selected_country}_{selected_city}")
 
         st.write("---")
-        st.subheader("🔍 세부 장소 검색 및 빠른 등록")
-        search_q = st.text_input("도시 내 명소를 검색하세요 (예: 피렌체 두오모 성당)")
-        if search_q:
-            with st.spinner('위치 찾는 중...'):
-                loc = geolocator.geocode(search_q)
-                if loc:
-                    st.success(f"📍 발견: {loc.address}")
-                    with st.form("quick_add_form"):
-                        q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
-                        if st.form_submit_button("현재 도시에 저장하기"):
-                            new_row = pd.DataFrame([{
-                                "국가": selected_country, 
-                                "도시": selected_city if selected_city != "전체 보기" else "미지정",
-                                "장소명": search_q, 
-                                "구글맵 링크": f"https://www.google.com/maps/search/?api=1&query={loc.latitude},{loc.longitude}",
-                                "카테고리": q_cat
-                            }])
-                            conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
-                            st.cache_data.clear()
-                            st.rerun()
-                else:
-                    st.warning("장소를 찾을 수 없습니다. 조금 더 구체적으로 검색해보세요.")
-
-        st.divider()
         st.subheader("📋 데이터 관리")
         edited = st.data_editor(display_df, use_container_width=True, hide_index=True, num_rows="dynamic")
         if st.button("💾 변경사항 저장", type="primary", use_container_width=True):
