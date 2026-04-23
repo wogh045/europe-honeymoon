@@ -120,11 +120,57 @@ if not df.empty:
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
 
         st.subheader(title_text)
+        
+        # 💡 [추가] 주요 국가별 국기 이모지 딕셔너리
+        FLAG_EMOJIS = {
+            "이탈리아": "🇮🇹", "프랑스": "🇫🇷", "스위스": "🇨🇭", "스페인": "🇪🇸",
+            "영국": "🇬🇧", "독일": "🇩🇪", "오스트리아": "🇦🇹", "체코": "🇨🇿",
+            "포르투갈": "🇵🇹", "그리스": "🇬🇷"
+        }
+
         valid_points = []
-        for _, row in display_df.iterrows():
-            lat, lon = extract_coords(row.get("구글맵 링크", ""))
-            if lat and lon:
-                valid_points.append({'lat': lat, 'lon': lon, 'name': row['장소명'], 'cat': row['카테고리'], 'city': row['도시']})
+        with st.spinner('좌표 분석 중...'):
+            for _, row in display_df.iterrows():
+                lat, lon = extract_coords(row.get("구글맵 링크", ""))
+                if lat and lon:
+                    # 마커 데이터에 'country(국가)' 정보를 추가로 저장합니다.
+                    valid_points.append({
+                        'lat': lat, 'lon': lon, 
+                        'name': row['장소명'], 'cat': row['카테고리'], 
+                        'city': row['도시'], 'country': row['국가']
+                    })
+
+        if valid_points:
+            center_lat = sum(p['lat'] for p in valid_points) / len(valid_points)
+            center_lon = sum(p['lon'] for p in valid_points) / len(valid_points)
+            zoom = 6 if selected_city == "전체 보기" else 13
+        else:
+            center_lat, center_lon = COUNTRY_DEFAULT_COORDS.get(selected_country, [48.8566, 2.3522])
+            zoom = 6
+
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
+        
+        for p in valid_points:
+            # 1. '도시' 카테고리일 경우 국기 이모지 적용
+            if p['cat'] == "도시":
+                # 딕셔너리에서 해당 국가의 국기를 찾고, 목록에 없으면 기본 핀(📍) 사용
+                flag = FLAG_EMOJIS.get(p['country'], "📍")
+                custom_icon = folium.DivIcon(html=f'<div style="font-size: 30px; text-shadow: 2px 2px 4px rgba(0,0,0,0.4);">{flag}</div>')
+            
+            # 2. 나머지 카테고리는 일반 아이콘 적용
+            else:
+                color = "red" if p['cat'] == "관광지" else "orange" if p['cat'] == "맛집" else "green" if p['cat'] == "숙소" else "blue"
+                icon_shape = "camera" if p['cat'] == "관광지" else "cutlery" if p['cat'] == "맛집" else "bed" if p['cat'] == "숙소" else "info-sign"
+                custom_icon = folium.Icon(color=color, icon=icon_shape)
+
+            folium.Marker(
+                [p['lat'], p['lon']], 
+                popup=f"({p['city']}) {p['name']}", 
+                tooltip=f"[{p['cat']}] {p['name']}", 
+                icon=custom_icon
+            ).add_to(m)
+        
+        st_folium(m, width="100%", height=500, key=f"map_{selected_country}_{selected_city}")
 
         # 지도 중심 설정 로직
         if valid_points:
