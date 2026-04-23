@@ -159,13 +159,26 @@ if not df.empty:
             center_lat, center_lon = COUNTRY_DEFAULT_COORDS.get(selected_country, [48.8566, 2.3522])
             zoom = 6
 
-        # 지도 생성 및 마커 커스텀 (국기 이미지 & 아이콘)
+       # 지도 생성 및 마커 커스텀 (국기 이미지 & 아이콘)
         m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
         for p in valid_points:
             # 1. '도시' 카테고리는 확실한 이미지 국기 적용
             if p['cat'] == "도시":
-                clean_country = str(p['country']).strip().lower()
-                country_code = FLAG_CODES.get(clean_country, "")
+                # 모든 공백을 아예 삭제해 버리고 소문자로 만듭니다.
+                raw_country = str(p['country']).lower().replace(" ", "")
+                country_code = ""
+                
+                # '단어 포함' 여부로 초강력 매칭
+                if "이탈리아" in raw_country or "italy" in raw_country: country_code = "it"
+                elif "프랑스" in raw_country or "france" in raw_country: country_code = "fr"
+                elif "스페인" in raw_country or "spain" in raw_country: country_code = "es"
+                elif "스위스" in raw_country or "switzerland" in raw_country: country_code = "ch"
+                elif "영국" in raw_country or "uk" in raw_country: country_code = "gb"
+                elif "독일" in raw_country or "germany" in raw_country: country_code = "de"
+                elif "오스트리아" in raw_country or "austria" in raw_country: country_code = "at"
+                elif "체코" in raw_country or "czech" in raw_country: country_code = "cz"
+                elif "포르투갈" in raw_country or "portugal" in raw_country: country_code = "pt"
+                elif "그리스" in raw_country or "greece" in raw_country: country_code = "gr"
                 
                 if country_code:
                     html_content = f'''
@@ -176,12 +189,21 @@ if not df.empty:
                     '''
                     custom_icon = folium.DivIcon(html=html_content)
                 else:
-                    custom_icon = folium.DivIcon(html='<div style="font-size: 30px;">📍</div>')
+                    # 🚨 매칭 실패 시 원인 파악을 위해 빨간 글씨로 현재 인식된 데이터를 띄웁니다!
+                    custom_icon = folium.DivIcon(html=f'<div style="font-size: 14px; color: red; font-weight: bold; text-shadow: 1px 1px 2px white;">📍{raw_country}</div>')
+            
             # 2. 나머지 카테고리는 색상 및 테마 아이콘 적용
             else:
                 color = "red" if p['cat'] == "관광지" else "orange" if p['cat'] == "맛집" else "green" if p['cat'] == "숙소" else "purple" if p['cat'] == "교통시설" else "blue"
                 icon_shape = "camera" if p['cat'] == "관광지" else "cutlery" if p['cat'] == "맛집" else "bed" if p['cat'] == "숙소" else "info-sign"
                 custom_icon = folium.Icon(color=color, icon=icon_shape)
+
+            folium.Marker(
+                [p['lat'], p['lon']], popup=f"({p['city']}) {p['name']}", 
+                tooltip=f"[{p['cat']}] {p['name']}", icon=custom_icon
+            ).add_to(m)
+        
+        st_folium(m, width="100%", height=500, key=f"map_{selected_country}_{selected_city}")
 
             folium.Marker(
                 [p['lat'], p['lon']], popup=f"({p['city']}) {p['name']}", 
