@@ -51,7 +51,7 @@ except Exception as e:
     st.stop()
 
 # --- UI 영역 ---
-st.title("💍 플래너") # 제목 변경
+st.title("💍 플래너")
 
 # 관리 패널
 with st.expander("🗑️ 관리", expanded=False):
@@ -110,7 +110,7 @@ if not df.empty:
             zoom = 12
         
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
-        st.subheader("🗺️") # 지도 헤더 변경
+        st.subheader("🗺️")
         
         valid_points = []
         for _, row in display_df.iterrows():
@@ -125,20 +125,28 @@ if not df.empty:
             c_lat, c_lon = 48.8566, 2.3522
 
         m = folium.Map(location=[c_lat, c_lon], zoom_start=zoom)
+        
+        # [수정] 카테고리별 이모지 마커 적용
         for p in valid_points:
             if p['cat'] == "도시":
                 code = get_country_code(p['country'])
                 icon = folium.DivIcon(html=f'<img src="https://flagcdn.com/w40/{code}.png" style="width:32px; border-radius:4px; box-shadow:2px 2px 5px rgba(0,0,0,0.3);">') if code else folium.DivIcon(html='📍')
             else:
-                color = "red" if p['cat'] == "관광지" else "orange" if p['cat'] == "맛집" else "green" if p['cat'] == "숙소" else "blue"
-                icon = folium.Icon(color=color, icon="info-sign")
+                if p['cat'] == "맛집": emoji = "🥄"
+                elif p['cat'] == "숙소": emoji = "🏠"
+                elif p['cat'] == "교통시설": emoji = "🚆"
+                elif p['cat'] == "관광지": emoji = "📸"
+                else: emoji = "📍"
+                
+                icon = folium.DivIcon(html=f'<div style="font-size:24px; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);">{emoji}</div>')
+                
             folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=icon).add_to(m)
         
-        st_folium(m, width="100%", height=500, key="map")
+        # [수정] 지도 높이 500 -> 700으로 확장
+        st_folium(m, width="100%", height=700, key="map")
 
-        # 검색창 심플화
         st.write("---")
-        search_q = st.text_input("🔍", placeholder="장소 검색") # 검색창 심플화
+        search_q = st.text_input("🔍", placeholder="장소 검색")
         if search_q:
             loc = geolocator.geocode(search_q)
             if loc:
