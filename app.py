@@ -7,6 +7,7 @@ import requests
 from urllib.parse import unquote
 from streamlit_gsheets import GSheetsConnection
 from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderServiceError
 
 # 1. 페이지 설정
 st.set_page_config(page_title="플래너", layout="wide")
@@ -14,8 +15,8 @@ st.set_page_config(page_title="플래너", layout="wide")
 # 구글 시트 URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-# Geocoder 설정
-geolocator = Nominatim(user_agent="honeymoon_planner_v15")
+# [수정] Geocoder 설정 (timeout을 10초로 늘려 서버 응답 지연 방어)
+geolocator = Nominatim(user_agent="honeymoon_planner_v16", timeout=10)
 
 # 세션 상태 초기화
 if 'search_result' not in st.session_state:
@@ -25,7 +26,7 @@ if 'last_country' not in st.session_state:
 if 'last_city' not in st.session_state:
     st.session_state.last_city = "전체 보기"
 
-# [핵심 수정] 신혼여행 주요 도시 절대 좌표 (바다로 빠지는 현상 원천 차단)
+# [핵심] 신혼여행 주요 도시 절대 좌표 (바다로 빠지는 현상 원천 차단)
 KNOWN_CITIES = {
     "로마": (41.9028, 12.4964), "파리": (48.8566, 2.3522),
     "피렌체": (43.7696, 11.2558), "베네치아": (45.4408, 12.3155),
@@ -79,20 +80,21 @@ except Exception as e:
 # --- UI 영역 ---
 st.title("💍 플래너")
 
-# 관리 패널
 with st.expander("🗑️ 관리", expanded=False):
-    st.warning("⚠️ 잘못된 도시나 데이터를 개별 삭제할 수 있습니다.")
     with st.form("delete_specific"):
         c_del1, c_del2 = st.columns(2)
         with c_del1: d_country = st.text_input("삭제할 국가 (예: 이탈리아)")
         with c_del2: d_city = st.text_input("삭제할 도시 (예: 로마)")
         if st.form_submit_button("해당 도시 삭제"):
             if d_country and d_city:
-                new_df = df[~((df['국가'] == d_country) & (df['도시'] == d_city))]
-                conn.update(spreadsheet=SHEET_URL, data=new_df)
-                st.success(f"{d_city} 삭제 완료!")
-                st.cache_data.clear()
-                st.rerun()
+                try:
+                    new_df = df[~((df['국가'] == d_country) & (df['도시'] == d_city))]
+                    conn.update(spreadsheet=SHEET_URL, data=new_df)
+                    st.success(f"{d_city} 삭제 완료!")
+                    st.cache_data.clear()
+                    st.rerun()
+                except Exception as e:
+                    st.error("구글 서버 제한에 걸렸습니다. 1분 후 다시 시도해주세요.")
             else:
                 st.error("국가와 도시를 모두 입력해주세요.")
                 
@@ -104,7 +106,6 @@ with st.expander("🗑️ 관리", expanded=False):
         st.cache_data.clear()
         st.rerun()
 
-# 도시 추가
 with st.expander("➕ 도시 추가", expanded=True):
     with st.form("add_city", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -113,26 +114,25 @@ with st.expander("➕ 도시 추가", expanded=True):
         if st.form_submit_button("등록", use_container_width=True):
             if add_country and add_city:
                 city_key = add_city.strip()
-                # [핵심 수정] 절대 좌표 사전에 있는 도시라면 검색 없이 바로 100% 정확한 좌표 적용
-                if city_key in KNOWN_CITIES:
-                    lat, lon = KNOWN_CITIES[city_key]
-                    safe_url = f"https://www.google.com/maps?q={lat},{lon}"
+                try:
+                    if city_key in KNOWN_CITIES:
+                        lat, lon = KNOWN_CITIES[city_key]
+                        safe_url = f"https://www.google.com/maps?q={lat},{lon}"
+                    else:
+                        with st.spinner(f'{add_city} 좌표 찾는 중...'):
+                            location = geolocator.geocode(f"{add_city}, {add_country}")
+                            if location:
+                                safe_url = f"https://www.google.com/maps?q={location.latitude},{location.longitude}"
+                            else:
+                                st.error("위치를 찾을 수 없습니다.")
+                                st.stop()
+                    
                     new_row = pd.DataFrame([{"국가": add_country.strip(), "도시": city_key, "장소명": f"{city_key} 중심", "구글맵 링크": safe_url, "카테고리": "도시", "메모": "베이스캠프"}])
                     conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
                     st.cache_data.clear()
                     st.rerun()
-                else:
-                    # 사전에 없는 도시는 기존처럼 검색 엔진 사용
-                    with st.spinner(f'{add_city} 좌표 찾는 중...'):
-                        location = geolocator.geocode(f"{add_city}, {add_country}")
-                        if location:
-                            safe_url = f"https://www.google.com/maps?q={location.latitude},{location.longitude}"
-                            new_row = pd.DataFrame([{"국가": add_country.strip(), "도시": city_key, "장소명": f"{city_key} 중심", "구글맵 링크": safe_url, "카테고리": "도시", "메모": "베이스캠프"}])
-                            conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("위치를 찾을 수 없습니다. 정확한 명칭을 입력해주세요.")
+                except Exception as e:
+                    st.error(f"구글 시트 저장 한도(1분 60회) 초과: 1분 뒤에 다시 시도해주세요.")
 
 st.divider()
 
@@ -176,21 +176,23 @@ if not df.empty:
         
         display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
         
-        search_q = st.text_input("🔍", placeholder="장소 검색 (검색 후 엔터)")
+        # [수정] 꿀팁 추가 (정확한 검색 유도)
+        search_q = st.text_input("🔍", placeholder="정확도를 위해 '도시명+장소'로 검색하세요 (예: 파리 에펠탑)")
         if search_q:
-            with st.spinner('🔍 검색 중...'):
-                loc = geolocator.geocode(search_q)
-                if loc:
-                    st.session_state.search_result = {
-                        'lat': loc.latitude, 'lon': loc.longitude, 
-                        'name': search_q, 'address': loc.address
-                    }
-                    initial_zoom = 16
-                else:
-                    st.session_state.search_result = None
-                    st.warning("❌ 장소를 찾을 수 없습니다.")
-
-        # [요청사항] 지도 위 이모지 삭제 완료
+            with st.spinner('🔍 검색 중... (네트워크 상황에 따라 2~5초 소요)'):
+                try:
+                    loc = geolocator.geocode(search_q)
+                    if loc:
+                        st.session_state.search_result = {
+                            'lat': loc.latitude, 'lon': loc.longitude, 
+                            'name': search_q, 'address': loc.address
+                        }
+                        initial_zoom = 16
+                    else:
+                        st.session_state.search_result = None
+                        st.warning("❌ 장소를 찾을 수 없습니다. (예: '콜로세움' 대신 '로마 콜로세움'으로 검색해보세요)")
+                except GeocoderTimedOut:
+                    st.error("무료 검색 서버 접속 지연입니다. 잠시 후 다시 검색해주세요.")
         
         valid_points = []
         for _, row in display_df.iterrows():
@@ -198,9 +200,12 @@ if not df.empty:
             if lat and lon:
                 valid_points.append({'lat': lat, 'lon': lon, 'name': row['장소명'], 'cat': row['카테고리'], 'country': row['국가'], 'city': row['도시']})
 
+        # [핵심 수정] 지도 중심 강제 잠금 로직
         if st.session_state.search_result:
             c_lat = st.session_state.search_result['lat']
             c_lon = st.session_state.search_result['lon']
+        elif selected_city in KNOWN_CITIES:  # 🚨 절대 좌표가 있는 도시를 선택했다면, 평균 좌표 무시하고 무조건 센터 고정!
+            c_lat, c_lon = KNOWN_CITIES[selected_city]
         elif valid_points:
             c_lat = sum(p['lat'] for p in valid_points) / len(valid_points)
             c_lon = sum(p['lon'] for p in valid_points) / len(valid_points)
@@ -233,25 +238,32 @@ if not df.empty:
         
         st_folium(m, width="100%", height=750, key=f"map_{selected_country}_{selected_city}")
 
+        # [수정] 데이터 저장 시에도 에러 방어벽(Try-Except) 추가
         if st.session_state.search_result:
             with st.form("quick_add_form"):
                 st.write(f"💾 **{st.session_state.search_result['name']}** 저장")
                 q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
                 if st.form_submit_button("현재 도시에 저장"):
-                    res = st.session_state.search_result
-                    new_row = pd.DataFrame([{"국가": selected_country if selected_country != "유럽 전체 보기" else "미정", "도시": selected_city if selected_city != "전체 보기" else "미정", "장소명": res['name'], "구글맵 링크": f"https://www.google.com/maps?q={res['lat']},{res['lon']}", "카테고리": q_cat}])
-                    conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
-                    st.session_state.search_result = None
-                    st.cache_data.clear()
-                    st.rerun()
+                    try:
+                        res = st.session_state.search_result
+                        new_row = pd.DataFrame([{"국가": selected_country if selected_country != "유럽 전체 보기" else "미정", "도시": selected_city if selected_city != "전체 보기" else "미정", "장소명": res['name'], "구글맵 링크": f"https://www.google.com/maps?q={res['lat']},{res['lon']}", "카테고리": q_cat}])
+                        conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
+                        st.session_state.search_result = None
+                        st.cache_data.clear()
+                        st.rerun()
+                    except Exception as e:
+                        st.error("구글 시트 저장 한도(1분 60회) 초과: 1분 뒤에 다시 버튼을 눌러주세요.")
 
         st.divider()
         st.subheader("📋")
         edited = st.data_editor(display_df, use_container_width=True, hide_index=True, num_rows="dynamic")
         if st.button("💾 저장", type="primary", use_container_width=True):
-            other = df[~df.index.isin(display_df.index)]
-            conn.update(spreadsheet=SHEET_URL, data=pd.concat([other, edited], ignore_index=True))
-            st.cache_data.clear()
-            st.rerun()
+            try:
+                other = df[~df.index.isin(display_df.index)]
+                conn.update(spreadsheet=SHEET_URL, data=pd.concat([other, edited], ignore_index=True))
+                st.cache_data.clear()
+                st.rerun()
+            except Exception as e:
+                st.error("구글 시트 API 속도 제한입니다. 1분만 기다리셨다가 저장해주세요!")
 else:
     st.info("도시를 추가해주세요.")
