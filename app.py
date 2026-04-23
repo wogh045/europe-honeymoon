@@ -150,7 +150,10 @@ if not df.empty:
         m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom)
         for p in valid_points:
             if p['cat'] == "도시":
-                country_code = FLAG_CODES.get(p['country'], "")
+                # 파이썬이 앞뒤 띄어쓰기를 자동으로 싹둑 잘라내고 비교합니다!
+                clean_country = str(p['country']).strip()
+                country_code = FLAG_CODES.get(clean_country, "")
+                
                 if country_code:
                     html_content = f'''
                         <div style="text-align: center;">
