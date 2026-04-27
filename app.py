@@ -7,58 +7,36 @@ import requests
 from urllib.parse import unquote
 from streamlit_gsheets import GSheetsConnection
 from geopy.geocoders import Nominatim
-# [추가] 속도 제한 에러와 자동 지연 도구 불러오기
 from geopy.exc import GeocoderTimedOut, GeocoderRateLimited
 from geopy.extra.rate_limiter import RateLimiter
 
-# 1. 페이지 설정
+# 1. 페이지 설정 (미니멀리즘 스타일)
 st.set_page_config(page_title="플래너", layout="wide")
 
 # 구글 시트 URL
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-# [핵심 수정] Geocoder 설정 및 속도 제한기(RateLimiter) 장착
-geolocator = Nominatim(user_agent="honeymoon_planner_v19", timeout=10)
-# 검색을 아무리 빨리 시도해도 무조건 1.5초 대기하도록 강제 설정
-geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5, error_wait_seconds=5.0)
+# Geocoder 설정 및 속도 제한기 (1.5초 지연 강제)
+geolocator = Nominatim(user_agent="honeymoon_planner_v20", timeout=10)
+geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
-# 세션 상태 초기화 
-if 'search_result' not in st.session_state:
-    st.session_state.search_result = None
-if 'last_clicked' not in st.session_state:
-    st.session_state.last_clicked = None
-if 'last_country' not in st.session_state:
-    st.session_state.last_country = "유럽 전체 보기"
-if 'last_city' not in st.session_state:
-    st.session_state.last_city = "전체 보기"
+# 세션 상태 초기화
+if 'search_result' not in st.session_state: st.session_state.search_result = None
+if 'last_clicked' not in st.session_state: st.session_state.last_clicked = None
+if 'last_country' not in st.session_state: st.session_state.last_country = "유럽 전체 보기"
+if 'last_city' not in st.session_state: st.session_state.last_city = "전체 보기"
 
-# 절대 좌표 사전
+# 주요 도시 절대 좌표 사전
 KNOWN_CITIES = {
-    "로마": (41.9028, 12.4964), "파리": (48.8566, 2.3522),
-    "피렌체": (43.7696, 11.2558), "베네치아": (45.4408, 12.3155),
-    "밀라노": (45.4642, 9.1900), "나폴리": (40.8518, 14.2681),
-    "바르셀로나": (41.3851, 2.1734), "마드리드": (40.4168, -3.7038),
-    "세비야": (37.3891, -5.9845), "그라나다": (37.1773, -3.5986),
-    "인터라켄": (46.6863, 7.8632), "취리히": (47.3769, 8.5417),
-    "루체른": (47.0502, 8.3093), "그린델발트": (46.6242, 8.0414),
-    "체르마트": (46.0207, 7.7491), "런던": (51.5074, -0.1278),
-    "뮌헨": (48.1351, 11.5820), "프랑크푸르트": (50.1109, 8.6821),
-    "베를린": (52.5200, 13.4050), "프라하": (50.0755, 14.4378),
-    "비엔나": (48.2082, 16.3738), "빈": (48.2082, 16.3738),
-    "부다페스트": (47.4979, 19.0402), "아테네": (37.9838, 23.7275),
-    "산토리니": (36.3932, 25.4615)
+    "로마": (41.9028, 12.4964), "파리": (48.8566, 2.3522), "피렌체": (43.7696, 11.2558),
+    "베네치아": (45.4408, 12.3155), "바르셀로나": (41.3851, 2.1734), "런던": (51.5074, -0.1278),
+    "프라하": (50.0755, 14.4378), "비엔나": (48.2082, 16.3738), "인터라켄": (46.6863, 7.8632)
 }
 
 # --- 유틸리티 함수 ---
 def get_country_code(name):
     name = re.sub(r'\s+', '', str(name).lower())
-    mapping = {
-        "이탈리아": "it", "italy": "it", "프랑스": "fr", "france": "fr",
-        "스페인": "es", "spain": "es", "스위스": "ch", "switzerland": "ch",
-        "영국": "gb", "uk": "gb", "독일": "de", "germany": "de",
-        "오스트리아": "at", "austria": "at", "체코": "cz", "czech": "cz",
-        "포르투갈": "pt", "portugal": "pt", "그리스": "gr", "greece": "gr"
-    }
+    mapping = {"이탈리아": "it", "프랑스": "fr", "스페인": "es", "스위스": "ch", "영국": "gb", "독일": "de"}
     return mapping.get(name, "")
 
 def extract_coords(url):
@@ -68,8 +46,6 @@ def extract_coords(url):
         match = re.search(r'q=([-+]?\d+\.\d+),([-+]?\d+\.\d+)', url_str)
         if match: return float(match.group(1)), float(match.group(2))
         match = re.search(r'@([-+]?\d+\.\d+),([-+]?\d+\.\d+)', url_str)
-        if match: return float(match.group(1)), float(match.group(2))
-        match = re.search(r'!3d([-+]?\d+\.\d+)!4d([-+]?\d+\.\d+)', url_str)
         if match: return float(match.group(1)), float(match.group(2))
     except: pass
     return None, None
@@ -83,235 +59,142 @@ except Exception as e:
     st.error(f"연결 오류: {e}")
     st.stop()
 
-# --- UI 영역 ---
+# --- 메인 UI: 플래너 ---
 st.title("💍 플래너")
 
-with st.expander("🗑️ 관리", expanded=False):
-    with st.form("delete_specific"):
-        c_del1, c_del2 = st.columns(2)
-        with c_del1: d_country = st.text_input("삭제할 국가 (예: 이탈리아)")
-        with c_del2: d_city = st.text_input("삭제할 도시 (예: 로마)")
-        if st.form_submit_button("해당 도시 삭제"):
-            if d_country and d_city:
-                try:
-                    new_df = df[~((df['국가'] == d_country) & (df['도시'] == d_city))]
-                    conn.update(spreadsheet=SHEET_URL, data=new_df)
-                    st.success(f"{d_city} 삭제 완료!")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e:
-                    st.error("구글 서버 제한입니다. 1분 후 시도해주세요.")
-            else:
-                st.error("국가와 도시를 모두 입력해주세요.")
-                
-    st.write("---")
-    if st.button("🚨 전체 데이터 초기화", type="primary"):
-        empty_df = pd.DataFrame(columns=["국가", "도시", "장소명", "구글맵 링크", "카테고리", "메모"])
-        conn.update(spreadsheet=SHEET_URL, data=empty_df)
-        st.session_state.search_result = None
-        st.session_state.last_clicked = None
-        st.cache_data.clear()
-        st.rerun()
+# 시트 분할 (탭 기능)
+tab1, tab2 = st.tabs(["📍 방문 예정지", "📅 체류 일정"])
 
-with st.expander("➕ 도시 추가", expanded=True):
-    with st.form("add_city", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1: add_country = st.text_input("국가", placeholder="예: 이탈리아")
-        with c2: add_city = st.text_input("도시", placeholder="예: 피렌체")
-        if st.form_submit_button("등록", use_container_width=True):
-            if add_country and add_city:
-                city_key = add_city.strip()
-                try:
-                    if city_key in KNOWN_CITIES:
-                        lat, lon = KNOWN_CITIES[city_key]
-                        safe_url = f"https://www.google.com/maps?q={lat},{lon}"
-                    else:
-                        with st.spinner(f'{add_city} 좌표 찾는 중... (최대 2초 소요)'):
-                            # [수정] 딜레이가 적용된 검색 함수 사용
-                            location = geocode_with_delay(f"{add_city}, {add_country}")
-                            if location:
-                                safe_url = f"https://www.google.com/maps?q={location.latitude},{location.longitude}"
-                            else:
-                                st.error("위치를 찾을 수 없습니다.")
-                                st.stop()
-                    
-                    new_row = pd.DataFrame([{"국가": add_country.strip(), "도시": city_key, "장소명": f"{city_key} 중심", "구글맵 링크": safe_url, "카테고리": "도시", "메모": "베이스캠프"}])
-                    conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
-                    st.cache_data.clear()
-                    st.rerun()
-                except GeocoderRateLimited:
-                    st.error("검색 서버 호출 제한에 걸렸습니다. 5초만 기다리셨다가 다시 등록해주세요!")
-                except Exception as e:
-                    st.error(f"알 수 없는 오류 발생: 잠시 후 다시 시도해주세요.")
+# ==========================================
+# [시트 1] 방문 예정지 (기존 수정사항 19 통합)
+# ==========================================
+with tab1:
+    # 도시 추가 패널
+    with st.expander("➕ 도시 추가", expanded=False):
+        with st.form("add_city", clear_on_submit=True):
+            c1, c2 = st.columns(2)
+            with c1: add_country = st.text_input("국가")
+            with c2: add_city = st.text_input("도시")
+            if st.form_submit_button("등록", use_container_width=True):
+                if add_country and add_city:
+                    lat, lon = KNOWN_CITIES.get(add_city, (None, None))
+                    if not lat:
+                        try:
+                            loc = geocode_with_delay(f"{add_city}, {add_country}")
+                            if loc: lat, lon = loc.latitude, loc.longitude
+                        except: pass
+                    if lat:
+                        new_row = pd.DataFrame([{"국가": add_country, "도시": add_city, "장소명": f"{add_city} 중심", "구글맵 링크": f"https://www.google.com/maps?q={lat},{lon}", "카테고리": "도시"}])
+                        conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
+                        st.cache_data.clear()
+                        st.rerun()
 
-st.divider()
-
-if not df.empty:
-    col_sel, col_edit = st.columns([2, 8])
-
-    with col_sel:
-        st.subheader("📍")
-        countries = ["유럽 전체 보기"] + sorted([c for c in df["국가"].dropna().unique() if str(c).strip()])
-        selected_country = st.selectbox("국가", countries)
+    if not df.empty:
+        col_sel, col_edit = st.columns([2, 8])
         
-        if selected_country != st.session_state.last_country:
-            st.session_state.search_result = None
-            st.session_state.last_clicked = None
-            st.session_state.last_country = selected_country
-        
-        if selected_country == "유럽 전체 보기":
-            selected_city = "전체 보기"
-        else:
-            city_list = df[df["국가"] == selected_country]["도시"].dropna().unique()
-            cities = ["전체 보기"] + sorted([c for c in city_list if str(c).strip()])
-            selected_city = st.selectbox("도시", cities)
-            
-            if selected_city != st.session_state.last_city:
+        with col_sel:
+            countries = ["유럽 전체 보기"] + sorted(list(df["국가"].dropna().unique()))
+            selected_country = st.selectbox("국가 선택", countries)
+            if selected_country != st.session_state.last_country:
                 st.session_state.search_result = None
                 st.session_state.last_clicked = None
-                st.session_state.last_city = selected_city
-        
-        st.write("---")
-        cats = ["도시", "관광지", "맛집", "숙소", "교통시설", "기타"]
-        selected_cats = [cat for cat in cats if st.checkbox(cat, value=True)]
+                st.session_state.last_country = selected_country
+            
+            city_list = df[df["국가"] == selected_country]["도시"].unique() if selected_country != "유럽 전체 보기" else []
+            selected_city = st.selectbox("도시 선택", ["전체 보기"] + list(city_list)) if selected_country != "유럽 전체 보기" else "전체 보기"
+            
+            st.write("---")
+            cats = ["도시", "관광지", "맛집", "숙소", "교통시설"]
+            selected_cats = [cat for cat in cats if st.checkbox(cat, value=True)]
 
-    with col_edit:
-        if selected_country == "유럽 전체 보기":
-            filtered_df = df.copy()
-            initial_zoom = 4
-        elif selected_city == "전체 보기":
-            filtered_df = df[df["국가"] == selected_country].copy()
-            initial_zoom = 6
-        else:
-            filtered_df = df[(df["국가"] == selected_country) & (df["도시"] == selected_city)].copy()
-            initial_zoom = 13
-        
-        display_df = filtered_df[filtered_df["카테고리"].isin(selected_cats)]
-        
-        search_q = st.text_input("🔍", placeholder="정확도를 위해 '도시명+장소'로 검색 (예: 파리 에펠탑)")
-        if search_q:
-            with st.spinner('🔍 검색 중... (무료 서버 속도 제한으로 1~2초 소요됩니다)'):
+        with col_edit:
+            # 검색창 (심플)
+            search_q = st.text_input("🔍", placeholder="장소 검색")
+            if search_q:
                 try:
-                    # [수정] 딜레이가 적용된 검색 함수 사용 및 에러 핸들링
                     loc = geocode_with_delay(search_q)
                     if loc:
                         st.session_state.search_result = {'lat': loc.latitude, 'lon': loc.longitude, 'name': search_q}
-                        st.session_state.last_clicked = None 
-                        initial_zoom = 16
-                    else:
-                        st.session_state.search_result = None
-                        st.warning("❌ 장소를 찾을 수 없습니다. (한국어 검색이 안 될 경우 영문으로 검색해보세요)")
-                except GeocoderRateLimited:
-                    st.error("🚨 단기간에 너무 많은 검색이 발생하여 무료 서버에서 일시 차단했습니다. 5초 후 다시 시도해주세요!")
-                except GeocoderTimedOut:
-                    st.error("접속 지연입니다. 잠시 후 다시 검색해주세요.")
-        
-        valid_points = []
-        for _, row in display_df.iterrows():
-            lat, lon = extract_coords(row.get("구글맵 링크", ""))
-            if lat and lon:
-                valid_points.append({'lat': lat, 'lon': lon, 'name': row['장소명'], 'cat': row['카테고리'], 'country': row['국가'], 'city': row['도시']})
-
-        if st.session_state.last_clicked:
-            c_lat, c_lon = st.session_state.last_clicked['lat'], st.session_state.last_clicked['lng']
-        elif st.session_state.search_result:
-            c_lat, c_lon = st.session_state.search_result['lat'], st.session_state.search_result['lon']
-        elif selected_city in KNOWN_CITIES:  
-            c_lat, c_lon = KNOWN_CITIES[selected_city]
-        elif valid_points:
-            c_lat = sum(p['lat'] for p in valid_points) / len(valid_points)
-            c_lon = sum(p['lon'] for p in valid_points) / len(valid_points)
-        else:
-            c_lat, c_lon = 48.8566, 2.3522
-
-        m = folium.Map(location=[c_lat, c_lon], zoom_start=initial_zoom)
-        is_detailed = initial_zoom >= 10
-
-        for p in valid_points:
-            if p['cat'] == "도시":
-                if not is_detailed:
-                    code = get_country_code(p['country'])
-                    icon_html = f'<img src="https://flagcdn.com/w40/{code}.png" style="width:34px; border:2px solid white; border-radius:4px; box-shadow:2px 2px 5px rgba(0,0,0,0.3);">' if code else '📍'
-                    folium.Marker([p['lat'], p['lon']], tooltip=p['city'], icon=folium.DivIcon(html=icon_html)).add_to(m)
-            else:
-                if is_detailed:
-                    if p['cat'] == "맛집": emj = "🥄"
-                    elif p['cat'] == "숙소": emj = "🏠"
-                    elif p['cat'] == "교통시설": emj = "🚆"
-                    elif p['cat'] == "관광지": emj = "📸"
-                    else: emj = "📍"
-                    icon_html = f'<div style="font-size:32px; filter: drop-shadow(2px 2px 2px rgba(0,0,0,0.5)); text-shadow: -2px 0 white, 0 2px white, 2px 0 white, 0 -2px white;">{emj}</div>'
-                    folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=folium.DivIcon(html=icon_html)).add_to(m)
-        
-        if st.session_state.search_result and not st.session_state.last_clicked:
-            res = st.session_state.search_result
-            folium.Marker([res['lat'], res['lon']], tooltip="검색 결과", icon=folium.DivIcon(html=f'<div style="font-size:40px; filter: drop-shadow(0 0 5px red);">📍</div>')).add_to(m)
-        
-        if st.session_state.last_clicked:
-            clk = st.session_state.last_clicked
-            folium.Marker([clk['lat'], clk['lng']], tooltip="내가 선택한 위치", icon=folium.DivIcon(html=f'<div style="font-size:40px; filter: drop-shadow(0 0 5px blue);">🎯</div>')).add_to(m)
-        
-        map_output = st_folium(m, width="100%", height=750, key=f"map_{selected_country}_{selected_city}")
-
-        if map_output and map_output.get('last_clicked'):
-            current_click = map_output['last_clicked']
-            if st.session_state.get('last_clicked') != current_click:
-                st.session_state.last_clicked = current_click
-                st.session_state.search_result = None 
-                st.rerun() 
-
-        if st.session_state.search_result:
-            with st.form("quick_add_form"):
-                st.write(f"💾 **{st.session_state.search_result['name']}** 저장")
-                q_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
-                if st.form_submit_button("현재 도시에 저장"):
-                    try:
-                        res = st.session_state.search_result
-                        new_row = pd.DataFrame([{"국가": selected_country if selected_country != "유럽 전체 보기" else "미정", "도시": selected_city if selected_city != "전체 보기" else "미정", "장소명": res['name'], "구글맵 링크": f"https://www.google.com/maps?q={res['lat']},{res['lon']}", "카테고리": q_cat}])
-                        conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
-                        st.session_state.search_result = None
-                        st.cache_data.clear()
-                        st.rerun()
-                    except Exception as e:
-                        st.error("구글 시트 저장 한도(1분 60회) 초과: 1분 뒤 다시 눌러주세요.")
-                        
-        elif st.session_state.last_clicked:
-            c_lat = st.session_state.last_clicked['lat']
-            c_lng = st.session_state.last_clicked['lng']
-            st.info(f"👆 지도 클릭 감지! 정확한 위치에 🎯 마커가 생겼습니다.")
-            
-            with st.form("manual_add_form"):
-                m_name = st.text_input("장소 이름", placeholder="직접 클릭한 장소의 이름을 적어주세요")
-                m_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
-                
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    if st.form_submit_button("취소하기", use_container_width=True):
                         st.session_state.last_clicked = None
-                        st.rerun()
-                with col_btn2:
-                    if st.form_submit_button("이 좌표로 장소 저장하기", type="primary", use_container_width=True):
-                        try:
-                            manual_url = f"https://www.google.com/maps?q={c_lat},{c_lng}"
-                            new_row = pd.DataFrame([{"국가": selected_country if selected_country != "유럽 전체 보기" else "미정", "도시": selected_city if selected_city != "전체 보기" else "미정", "장소명": m_name if m_name else "수동 지정 장소", "구글맵 링크": manual_url, "카테고리": m_cat, "메모": "지도 클릭으로 직접 지정함"}])
-                            conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
-                            st.session_state.last_clicked = None
-                            st.success("수동 지정 위치 저장 완료!")
-                            st.cache_data.clear()
-                            st.rerun()
-                        except Exception as e:
-                            st.error("구글 시트 저장 한도 초과: 1분 뒤 다시 시도해주세요.")
+                    else: st.warning("장소를 찾을 수 없습니다.")
+                except GeocoderRateLimited: st.error("잠시 후 다시 검색해주세요.")
 
-        st.divider()
-        st.subheader("📋")
-        edited = st.data_editor(display_df, use_container_width=True, hide_index=True, num_rows="dynamic")
-        if st.button("💾 저장", type="primary", use_container_width=True):
-            try:
+            # 지도 로직
+            f_df = df if selected_country == "유럽 전체 보기" else df[df["국가"] == selected_country]
+            if selected_city != "전체 보기": f_df = f_df[f_df["도시"] == selected_city]
+            display_df = f_df[f_df["카테고리"].isin(selected_cats)]
+            
+            valid_points = []
+            for _, r in display_df.iterrows():
+                lat, lon = extract_coords(r.get("구글맵 링크", ""))
+                if lat: valid_points.append({'lat': lat, 'lon': lon, 'name': r['장소명'], 'cat': r['카테고리'], 'country': r['국가'], 'city': r['도시']})
+            
+            # 중심점 결정
+            initial_zoom = 4 if selected_country == "유럽 전체 보기" else (6 if selected_city == "전체 보기" else 13)
+            if st.session_state.last_clicked: c_lat, c_lon = st.session_state.last_clicked['lat'], st.session_state.last_clicked['lng']
+            elif st.session_state.search_result: c_lat, c_lon = st.session_state.search_result['lat'], st.session_state.search_result['lon']; initial_zoom = 16
+            elif valid_points: c_lat, c_lon = sum(p['lat'] for p in valid_points)/len(valid_points), sum(p['lon'] for p in valid_points)/len(valid_points)
+            else: c_lat, c_lon = 48.8566, 2.3522
+
+            m = folium.Map(location=[c_lat, c_lon], zoom_start=initial_zoom)
+            is_detailed = initial_zoom >= 10
+
+            for p in valid_points:
+                if p['cat'] == "도시":
+                    if not is_detailed:
+                        code = get_country_code(p['country'])
+                        icon = folium.DivIcon(html=f'<img src="https://flagcdn.com/w40/{code}.png" style="width:34px; border-radius:4px; box-shadow:2px 2px 5px rgba(0,0,0,0.3);">') if code else folium.DivIcon(html='📍')
+                        folium.Marker([p['lat'], p['lon']], tooltip=p['city'], icon=icon).add_to(m)
+                else:
+                    if is_detailed:
+                        emj = {"맛집":"🥄", "숙소":"🏠", "교통시설":"🚆", "관광지":"📸"}.get(p['cat'], "📍")
+                        icon = folium.DivIcon(html=f'<div style="font-size:32px; text-shadow: -2px 0 white, 0 2px white, 2px 0 white, 0 -2px white;">{emj}</div>')
+                        folium.Marker([p['lat'], p['lon']], tooltip=p['name'], icon=icon).add_to(m)
+            
+            # 검색/클릭 핀
+            if st.session_state.search_result: folium.Marker([st.session_state.search_result['lat'], st.session_state.search_result['lon']], icon=folium.DivIcon(html='<div style="font-size:40px;">📍</div>')).add_to(m)
+            if st.session_state.last_clicked: folium.Marker([st.session_state.last_clicked['lat'], st.session_state.last_clicked['lng']], icon=folium.DivIcon(html='<div style="font-size:40px;">🎯</div>')).add_to(m)
+
+            map_out = st_folium(m, width="100%", height=750, key=f"map_{selected_country}_{selected_city}")
+            if map_out and map_out.get('last_clicked'):
+                if st.session_state.last_clicked != map_out['last_clicked']:
+                    st.session_state.last_clicked = map_out['last_clicked']; st.session_state.search_result = None; st.rerun()
+
+            # 저장 폼
+            target = st.session_state.search_result or (st.session_state.last_clicked and {'lat':st.session_state.last_clicked['lat'], 'lon':st.session_state.last_clicked['lng'], 'name':'수동 선택 장소'})
+            if target:
+                with st.form("save_place"):
+                    st.write(f"💾 {target.get('name', '장소')} 저장")
+                    s_name = st.text_input("이름", value=target.get('name', ''))
+                    s_cat = st.selectbox("카테고리", ["관광지", "맛집", "숙소", "교통시설", "기타"])
+                    if st.form_submit_button("저장"):
+                        new_row = pd.DataFrame([{"국가": selected_country if selected_country != "유럽 전체 보기" else "미정", "도시": selected_city if selected_city != "전체 보기" else "미정", "장소명": s_name, "구글맵 링크": f"https://www.google.com/maps?q={target['lat']},{target['lon']}", "카테고리": s_cat}])
+                        conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
+                        st.session_state.search_result = st.session_state.last_clicked = None; st.cache_data.clear(); st.rerun()
+
+            st.divider()
+            st.subheader("📋")
+            edited = st.data_editor(display_df, use_container_width=True, hide_index=True, num_rows="dynamic")
+            if st.button("💾 시트 변경사항 저장"):
                 other = df[~df.index.isin(display_df.index)]
                 conn.update(spreadsheet=SHEET_URL, data=pd.concat([other, edited], ignore_index=True))
-                st.cache_data.clear()
-                st.rerun()
-            except Exception as e:
-                st.error("구글 시트 저장 한도 초과: 1분만 기다리셨다가 저장해주세요!")
-else:
-    st.info("상단의 '도시 추가' 패널을 열어 첫 번째 여행지를 등록해주세요.")
+                st.cache_data.clear(); st.rerun()
+
+# ==========================================
+# [시트 2] 체류 일정 (상세 스케줄링)
+# ==========================================
+with tab2:
+    st.subheader("📅 체류 일정")
+    if not df.empty:
+        # 도시 목록 가져오기
+        city_rows = df[df["카테고리"] == "도시"].copy()
+        if not city_rows.empty:
+            st.info("각 도시별 체류 기간과 메모를 관리할 수 있습니다. (구글 시트에 '시작일', '종료일' 컬럼이 있으면 더욱 좋습니다)")
+            # 엑셀 시트 형식으로 체류 일정만 별도로 편집
+            st.data_editor(city_rows[["국가", "도시", "메모"]], use_container_width=True, hide_index=True)
+            st.write("---")
+            st.caption("💡 팁: '방문 예정지' 시트에서 장소를 검색하여 추가하면 도시별 맛집/관광지 리스트를 자동으로 쌓을 수 있습니다.")
+        else:
+            st.warning("등록된 도시가 없습니다. 먼저 '방문 예정지' 시트에서 도시를 추가해주세요.")
+    else:
+        st.info("데이터가 없습니다.")
