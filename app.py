@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="플래너", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v21", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v22", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -55,7 +55,6 @@ try:
     conn = st.connection("gsheets", type=GSheetsConnection)
     df = conn.read(spreadsheet=SHEET_URL, ttl=600)
     df.columns = [str(c).strip() for c in df.columns]
-    # 달력을 위해 필수 컬럼 강제 생성
     for col in ["시작일", "종료일"]:
         if col not in df.columns:
             df[col] = None
@@ -181,16 +180,12 @@ with tab1:
 with tab2:
     st.subheader("📅 여행 달력")
     
-    # 1. 달력 연/월 선택
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
-    with cal_c1:
-        sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1)
-    with cal_c2:
-        sel_month = st.selectbox("월", list(range(1, 13)), index=4) # 기본 5월
+    with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1)
+    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=4)
         
     st.write("---")
     
-    # 2. 날짜에 표시할 국기 매핑 로직
     city_df = df[df['카테고리'] == '도시'].copy()
     flag_schedule = {}
     
@@ -198,29 +193,27 @@ with tab2:
         s_date = str(row.get('시작일', '')).strip()
         e_date = str(row.get('종료일', '')).strip()
         country_name = row.get('국가', '')
-        city_name = row.get('도시', '')
         
-        # 시작일과 종료일이 모두 입력된 경우에만 달력에 표시
-        if s_date and e_date and s_date != 'None' and e_date != 'None':
+        if s_date and e_date and s_date.lower() != 'none' and e_date.lower() != 'none':
             try:
                 start_dt = pd.to_datetime(s_date).date()
                 end_dt = pd.to_datetime(e_date).date()
                 code = get_country_code(country_name)
                 
-                # 이미지 국기 HTML 생성
                 flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:30px; border-radius:3px; box-shadow:1px 1px 3px rgba(0,0,0,0.3); margin-top:5px;'>" if code else "📍"
                 
                 curr_dt = start_dt
                 while curr_dt <= end_dt:
                     if curr_dt.year == sel_year and curr_dt.month == sel_month:
-                        flag_schedule[curr_dt.day] = flag_img
+                        # 같은 날 여러 도시가 겹칠 경우 국기를 옆으로 나열
+                        if curr_dt.day in flag_schedule and flag_img not in flag_schedule[curr_dt.day]:
+                            flag_schedule[curr_dt.day] += f" {flag_img}"
+                        else:
+                            flag_schedule[curr_dt.day] = flag_img
                     curr_dt += timedelta(days=1)
-            except:
-                pass # 날짜 형식이 잘못된 경우 무시
+            except: pass 
 
-    # 3. HTML/CSS 달력 렌더링
     cal = calendar.monthcalendar(sel_year, sel_month)
-    month_names = ["", "1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"]
     
     html_cal = f"""
     <style>
@@ -246,34 +239,32 @@ with tab2:
         html_cal += "</tr>"
     html_cal += "</table>"
     
-    # 달력 화면에 띄우기
     st.markdown(html_cal, unsafe_allow_html=True)
-    
     st.write("---")
     
-    # 4. 일정(시작일/종료일) 관리 에디터
     st.subheader("📝 체류 기간 설정")
-    st.info("아래 표에서 각 도시의 **'시작일'**과 **'종료일'**을 더블클릭하여 날짜를 입력하면, 위의 달력에 자동으로 국기가 꽂힙니다. (형식: 2027-05-01)")
+    st.info("아래 표의 '시작일'과 '종료일'을 더블클릭하여 여행 기간을 입력하세요. 달력 위젯 충돌 오류가 해결되었습니다!")
     
-    # 편집 가능한 컬럼 설정
     schedule_editor_df = df[df["카테고리"] == "도시"][["국가", "도시", "시작일", "종료일"]].copy()
+    
+    # [핵심 수정] 글자나 빈칸으로 되어있던 데이터를 안전한 '날짜(Datetime) 객체'로 강제 변환
+    schedule_editor_df["시작일"] = pd.to_datetime(schedule_editor_df["시작일"], errors="coerce").dt.date
+    schedule_editor_df["종료일"] = pd.to_datetime(schedule_editor_df["종료일"], errors="coerce").dt.date
     
     edited_schedule = st.data_editor(
         schedule_editor_df,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "시작일": st.column_config.DateColumn("시작일", format="YYYY-MM-DD"),
-            "종료일": st.column_config.DateColumn("종료일", format="YYYY-MM-DD")
+            "시작일": st.column_config.DateColumn("시작일 (YYYY-MM-DD)", format="YYYY-MM-DD"),
+            "종료일": st.column_config.DateColumn("종료일 (YYYY-MM-DD)", format="YYYY-MM-DD")
         }
     )
     
     if st.button("💾 일정 저장", key="save_schedule_btn", type="primary"):
         try:
-            # 전체 df 업데이트
             updated_df = df.copy()
             for idx, row in edited_schedule.iterrows():
-                # 원본 df에서 일치하는 행을 찾아 시작일/종료일 업데이트
                 mask = (updated_df["국가"] == row["국가"]) & (updated_df["도시"] == row["도시"]) & (updated_df["카테고리"] == "도시")
                 updated_df.loc[mask, "시작일"] = str(row["시작일"]) if pd.notna(row["시작일"]) else ""
                 updated_df.loc[mask, "종료일"] = str(row["종료일"]) if pd.notna(row["종료일"]) else ""
@@ -282,4 +273,4 @@ with tab2:
             st.cache_data.clear()
             st.rerun()
         except Exception as e:
-            st.error("저장에 실패했습니다. 잠시 후 다시 시도해주세요.")
+            st.error("저장에 실패했습니다. 1분 후 다시 시도해주세요.")
