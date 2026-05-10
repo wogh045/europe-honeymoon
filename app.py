@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="플래너", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v22", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v23", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -25,18 +25,24 @@ if 'last_clicked' not in st.session_state: st.session_state.last_clicked = None
 if 'last_country' not in st.session_state: st.session_state.last_country = "유럽 전체 보기"
 if 'last_city' not in st.session_state: st.session_state.last_city = "전체 보기"
 
+# [수정] 주요 도시 절대 좌표 사전에 두바이 추가
 KNOWN_CITIES = {
     "로마": (41.9028, 12.4964), "파리": (48.8566, 2.3522), "피렌체": (43.7696, 11.2558),
     "베네치아": (45.4408, 12.3155), "바르셀로나": (41.3851, 2.1734), "런던": (51.5074, -0.1278),
-    "프라하": (50.0755, 14.4378), "비엔나": (48.2082, 16.3738), "인터라켄": (46.6863, 7.8632)
+    "프라하": (50.0755, 14.4378), "비엔나": (48.2082, 16.3738), "인터라켄": (46.6863, 7.8632),
+    "두바이": (25.2048, 55.2708)
 }
 
 # --- 유틸리티 함수 ---
 def get_country_code(name):
     name = re.sub(r'\s+', '', str(name).lower())
-    mapping = {"이탈리아": "it", "italy": "it", "프랑스": "fr", "france": "fr",
-               "스페인": "es", "spain": "es", "스위스": "ch", "switzerland": "ch",
-               "영국": "gb", "uk": "gb", "독일": "de", "germany": "de"}
+    # [수정] UAE 및 아랍에미리트 국기 매핑 추가
+    mapping = {
+        "이탈리아": "it", "italy": "it", "프랑스": "fr", "france": "fr",
+        "스페인": "es", "spain": "es", "스위스": "ch", "switzerland": "ch",
+        "영국": "gb", "uk": "gb", "독일": "de", "germany": "de",
+        "아랍에미리트": "ae", "아랍에미레이트": "ae", "uae": "ae", "두바이": "ae"
+    }
     return mapping.get(name, "")
 
 def extract_coords(url):
@@ -74,8 +80,8 @@ with tab1:
     with st.expander("➕ 도시 추가", expanded=False):
         with st.form("add_city", clear_on_submit=True):
             c1, c2 = st.columns(2)
-            with c1: add_country = st.text_input("국가")
-            with c2: add_city = st.text_input("도시")
+            with c1: add_country = st.text_input("국가", placeholder="예: UAE")
+            with c2: add_city = st.text_input("도시", placeholder="예: 두바이")
             if st.form_submit_button("등록", use_container_width=True):
                 if add_country and add_city:
                     lat, lon = KNOWN_CITIES.get(add_city, (None, None))
@@ -126,7 +132,9 @@ with tab1:
                 lat, lon = extract_coords(r.get("구글맵 링크", ""))
                 if lat: valid_points.append({'lat': lat, 'lon': lon, 'name': r['장소명'], 'cat': r['카테고리'], 'country': r['국가'], 'city': r['도시']})
             
-            initial_zoom = 4 if selected_country == "유럽 전체 보기" else (6 if selected_city == "전체 보기" else 13)
+            # [수정] 두바이가 포함되었으므로 유럽 전체 보기의 중심점과 줌 레벨을 조금 넓게 조정
+            initial_zoom = 3 if selected_country == "유럽 전체 보기" else (6 if selected_city == "전체 보기" else 13)
+            
             if st.session_state.last_clicked: c_lat, c_lon = st.session_state.last_clicked['lat'], st.session_state.last_clicked['lng']
             elif st.session_state.search_result: c_lat, c_lon = st.session_state.search_result['lat'], st.session_state.search_result['lon']; initial_zoom = 16
             elif valid_points: c_lat, c_lon = sum(p['lat'] for p in valid_points)/len(valid_points), sum(p['lon'] for p in valid_points)/len(valid_points)
@@ -205,7 +213,6 @@ with tab2:
                 curr_dt = start_dt
                 while curr_dt <= end_dt:
                     if curr_dt.year == sel_year and curr_dt.month == sel_month:
-                        # 같은 날 여러 도시가 겹칠 경우 국기를 옆으로 나열
                         if curr_dt.day in flag_schedule and flag_img not in flag_schedule[curr_dt.day]:
                             flag_schedule[curr_dt.day] += f" {flag_img}"
                         else:
@@ -243,11 +250,10 @@ with tab2:
     st.write("---")
     
     st.subheader("📝 체류 기간 설정")
-    st.info("아래 표의 '시작일'과 '종료일'을 더블클릭하여 여행 기간을 입력하세요. 달력 위젯 충돌 오류가 해결되었습니다!")
+    st.info("아래 표의 '시작일'과 '종료일'을 더블클릭하여 여행 기간을 입력하세요.")
     
     schedule_editor_df = df[df["카테고리"] == "도시"][["국가", "도시", "시작일", "종료일"]].copy()
     
-    # [핵심 수정] 글자나 빈칸으로 되어있던 데이터를 안전한 '날짜(Datetime) 객체'로 강제 변환
     schedule_editor_df["시작일"] = pd.to_datetime(schedule_editor_df["시작일"], errors="coerce").dt.date
     schedule_editor_df["종료일"] = pd.to_datetime(schedule_editor_df["종료일"], errors="coerce").dt.date
     
