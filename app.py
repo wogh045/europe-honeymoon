@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 st.set_page_config(page_title="플래너", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v23", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v24", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -25,24 +25,22 @@ if 'last_clicked' not in st.session_state: st.session_state.last_clicked = None
 if 'last_country' not in st.session_state: st.session_state.last_country = "유럽 전체 보기"
 if 'last_city' not in st.session_state: st.session_state.last_city = "전체 보기"
 
-# [수정] 주요 도시 절대 좌표 사전에 두바이 추가
+# 절대 좌표 사전
 KNOWN_CITIES = {
     "로마": (41.9028, 12.4964), "파리": (48.8566, 2.3522), "피렌체": (43.7696, 11.2558),
     "베네치아": (45.4408, 12.3155), "바르셀로나": (41.3851, 2.1734), "런던": (51.5074, -0.1278),
     "프라하": (50.0755, 14.4378), "비엔나": (48.2082, 16.3738), "인터라켄": (46.6863, 7.8632),
-    "두바이": (25.2048, 55.2708)
+    "두바이": (25.2048, 55.2708) # 두바이 절대좌표 추가
 }
 
 # --- 유틸리티 함수 ---
 def get_country_code(name):
     name = re.sub(r'\s+', '', str(name).lower())
-    # [수정] UAE 및 아랍에미리트 국기 매핑 추가
-    mapping = {
-        "이탈리아": "it", "italy": "it", "프랑스": "fr", "france": "fr",
-        "스페인": "es", "spain": "es", "스위스": "ch", "switzerland": "ch",
-        "영국": "gb", "uk": "gb", "독일": "de", "germany": "de",
-        "아랍에미리트": "ae", "아랍에미레이트": "ae", "uae": "ae", "두바이": "ae"
-    }
+    # [수정] UAE 매핑 완벽 적용
+    mapping = {"이탈리아": "it", "italy": "it", "프랑스": "fr", "france": "fr",
+               "스페인": "es", "spain": "es", "스위스": "ch", "switzerland": "ch",
+               "영국": "gb", "uk": "gb", "독일": "de", "germany": "de",
+               "uae": "ae", "아랍에미리트": "ae", "아랍에미레이트": "ae", "두바이": "ae"}
     return mapping.get(name, "")
 
 def extract_coords(url):
@@ -132,9 +130,7 @@ with tab1:
                 lat, lon = extract_coords(r.get("구글맵 링크", ""))
                 if lat: valid_points.append({'lat': lat, 'lon': lon, 'name': r['장소명'], 'cat': r['카테고리'], 'country': r['국가'], 'city': r['도시']})
             
-            # [수정] 두바이가 포함되었으므로 유럽 전체 보기의 중심점과 줌 레벨을 조금 넓게 조정
             initial_zoom = 3 if selected_country == "유럽 전체 보기" else (6 if selected_city == "전체 보기" else 13)
-            
             if st.session_state.last_clicked: c_lat, c_lon = st.session_state.last_clicked['lat'], st.session_state.last_clicked['lng']
             elif st.session_state.search_result: c_lat, c_lon = st.session_state.search_result['lat'], st.session_state.search_result['lon']; initial_zoom = 16
             elif valid_points: c_lat, c_lon = sum(p['lat'] for p in valid_points)/len(valid_points), sum(p['lon'] for p in valid_points)/len(valid_points)
@@ -188,9 +184,10 @@ with tab1:
 with tab2:
     st.subheader("📅 여행 달력")
     
+    # [수정] 달력 설정이 새로고침 후에도 유지되도록 key 부여
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
-    with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1)
-    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=4)
+    with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1, key="cal_year")
+    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=4, key="cal_month")
         
     st.write("---")
     
@@ -202,7 +199,8 @@ with tab2:
         e_date = str(row.get('종료일', '')).strip()
         country_name = row.get('국가', '')
         
-        if s_date and e_date and s_date.lower() != 'none' and e_date.lower() != 'none':
+        # 날짜 문자열 검증
+        if s_date and e_date and s_date.lower() not in ['none', 'nat', 'nan'] and e_date.lower() not in ['none', 'nat', 'nan']:
             try:
                 start_dt = pd.to_datetime(s_date).date()
                 end_dt = pd.to_datetime(e_date).date()
@@ -215,7 +213,7 @@ with tab2:
                     if curr_dt.year == sel_year and curr_dt.month == sel_month:
                         if curr_dt.day in flag_schedule and flag_img not in flag_schedule[curr_dt.day]:
                             flag_schedule[curr_dt.day] += f" {flag_img}"
-                        else:
+                        elif curr_dt.day not in flag_schedule:
                             flag_schedule[curr_dt.day] = flag_img
                     curr_dt += timedelta(days=1)
             except: pass 
@@ -250,7 +248,7 @@ with tab2:
     st.write("---")
     
     st.subheader("📝 체류 기간 설정")
-    st.info("아래 표의 '시작일'과 '종료일'을 더블클릭하여 여행 기간을 입력하세요.")
+    st.info("아래 표의 '시작일'과 '종료일'을 더블클릭하여 여행 기간을 입력하세요. 수정한 뒤 반드시 **저장 버튼**을 눌러야 달력에 국기가 표시됩니다.")
     
     schedule_editor_df = df[df["카테고리"] == "도시"][["국가", "도시", "시작일", "종료일"]].copy()
     
@@ -267,16 +265,28 @@ with tab2:
         }
     )
     
+    # [핵심 수정] 날짜 저장 시 오류 방지 및 형변환 완벽 처리
     if st.button("💾 일정 저장", key="save_schedule_btn", type="primary"):
         try:
             updated_df = df.copy()
             for idx, row in edited_schedule.iterrows():
                 mask = (updated_df["국가"] == row["국가"]) & (updated_df["도시"] == row["도시"]) & (updated_df["카테고리"] == "도시")
-                updated_df.loc[mask, "시작일"] = str(row["시작일"]) if pd.notna(row["시작일"]) else ""
-                updated_df.loc[mask, "종료일"] = str(row["종료일"]) if pd.notna(row["종료일"]) else ""
+                
+                s_val = row["시작일"]
+                e_val = row["종료일"]
+                
+                # 순수 텍스트 형태(YYYY-MM-DD)로 변환하여 에러 원천 차단
+                s_str = s_val.strftime("%Y-%m-%d") if pd.notnull(s_val) and hasattr(s_val, 'strftime') else str(s_val) if pd.notnull(s_val) else ""
+                e_str = e_val.strftime("%Y-%m-%d") if pd.notnull(e_val) and hasattr(e_val, 'strftime') else str(e_val) if pd.notnull(e_val) else ""
+                
+                if s_str.lower() in ['nat', 'none', 'nan']: s_str = ""
+                if e_str.lower() in ['nat', 'none', 'nan']: e_str = ""
+                
+                updated_df.loc[mask, "시작일"] = s_str
+                updated_df.loc[mask, "종료일"] = e_str
             
             conn.update(spreadsheet=SHEET_URL, data=updated_df)
             st.cache_data.clear()
             st.rerun()
         except Exception as e:
-            st.error("저장에 실패했습니다. 1분 후 다시 시도해주세요.")
+            st.error(f"저장에 실패했습니다. 1분 후 다시 시도해주세요. ({e})")
