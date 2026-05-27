@@ -12,11 +12,11 @@ from geopy.extra.rate_limiter import RateLimiter
 import calendar
 from datetime import datetime, timedelta
 
-# 1. 페이지 설정
+# 1. 페이지 설정 (제목을 🛫 로 변경)
 st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v26", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v27", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -52,16 +52,12 @@ def extract_coords(url):
     except: pass
     return None, None
 
-# --- 데이터 로드 (신규 컬럼 강제 생성 및 호환성 보장) ---
+# --- 데이터 로드 ---
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
     df = conn.read(spreadsheet=SHEET_URL, ttl=600)
     df.columns = [str(c).strip() for c in df.columns]
     
-    # [수정] 계획/실제 분할과 예산을 위한 컬럼 구조화
-    if "비용" in df.columns and "계획 비용" not in df.columns:
-        df["계획 비용"] = df["비용"] # 과거 데이터 마이그레이션
-        
     for col in ["시작일", "종료일", "시간", "계획 비용", "실제 일정", "실제 비용", "총 예산"]:
         if col not in df.columns:
             df[col] = "" if col in ["시작일", "종료일", "시간", "실제 일정"] else 0
@@ -69,11 +65,11 @@ except Exception as e:
     st.error(f"연결 오류: {e}")
     st.stop()
 
-# --- 메인 UI ---
+# --- 메인 UI (요청 1: 타이틀을 오직 이륙 이모지로만 간소화) ---
 st.title("🛫")
 
-# [수정] 4개의 탭으로 확장
-tab1, tab2, tab3, tab4 = st.tabs(["📍 방문 예정지", "📅 체류 일정", "⏱️ 일일 상세 일정", "💰 여행 가계부"])
+# 3개의 탭 구조로 통합 (기존 상세 일정 탭 삭제 후 체류 일정 내부로 융합)
+tab1, tab2, tab3 = st.tabs(["📍 방문 예정지", "📅 체류 일정", "💰 여행 가계부"])
 
 # ==========================================
 # [시트 1] 방문 예정지 (지도/장소 관리)
@@ -174,14 +170,22 @@ with tab1:
                         conn.update(spreadsheet=SHEET_URL, data=pd.concat([df, new_row], ignore_index=True))
                         st.session_state.search_result = st.session_state.last_clicked = None; st.cache_data.clear(); st.rerun()
 
+            st.divider()
+            st.subheader("📋")
+            edited = st.data_editor(display_df, use_container_width=True, hide_index=True, num_rows="dynamic")
+            if st.button("💾 시트 변경사항 저장", key="save_btn_1"):
+                other = df[~df.index.isin(display_df.index)]
+                conn.update(spreadsheet=SHEET_URL, data=pd.concat([other, edited], ignore_index=True))
+                st.cache_data.clear(); st.rerun()
+
 # ==========================================
-# [시트 2] 체류 일정 (달력)
+# [시트 2] 체류 일정 + 일일 상세 일정 (융합 탭)
 # ==========================================
 with tab2:
     st.subheader("📅 여행 달력")
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
     with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1, key="cal_year")
-    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=4, key="cal_month")
+    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 예시 편의상 4월 기본 지정
     st.write("---")
     
     city_df = df[df['카테고리'] == '도시'].copy()
@@ -228,33 +232,11 @@ with tab2:
         html_cal += "</tr>"
     html_cal += "</table>"
     st.markdown(html_cal, unsafe_allow_html=True)
-    st.write("---")
     
-    with st.expander("📝 체류 기간 설정 (클릭하여 열기)", expanded=False):
-        schedule_editor_df = df[df["카테고리"] == "도시"][["국가", "도시", "시작일", "종료일"]].copy()
-        schedule_editor_df["시작일"] = pd.to_datetime(schedule_editor_df["시작일"], errors="coerce").dt.date
-        schedule_editor_df["종료일"] = pd.to_datetime(schedule_editor_df["종료일"], errors="coerce").dt.date
-        
-        edited_schedule = st.data_editor(schedule_editor_df, use_container_width=True, hide_index=True, column_config={"시작일": st.column_config.DateColumn("시작일 (YYYY-MM-DD)"), "종료일": st.column_config.DateColumn("종료일 (YYYY-MM-DD)")})
-        
-        if st.button("💾 체류 일정 저장", key="save_schedule_btn", type="primary"):
-            try:
-                updated_df = df.copy()
-                for idx, row in edited_schedule.iterrows():
-                    mask = (updated_df["국가"] == row["국가"]) & (updated_df["도시"] == row["도시"]) & (updated_df["카테고리"] == "도시")
-                    s_val, e_val = row["시작일"], row["종료일"]
-                    updated_df.loc[mask, "시작일"] = s_val.strftime("%Y-%m-%d") if pd.notnull(s_val) and hasattr(s_val, 'strftime') else ""
-                    updated_df.loc[mask, "종료일"] = e_val.strftime("%Y-%m-%d") if pd.notnull(e_val) and hasattr(e_val, 'strftime') else ""
-                conn.update(spreadsheet=SHEET_URL, data=updated_df)
-                st.cache_data.clear(); st.rerun()
-            except Exception as e: st.error("저장 실패.")
-
-# ==========================================
-# [시트 3] 일일 상세 일정 (계획 vs 실제 분할)
-# ==========================================
-with tab3:
-    st.subheader("⏱️ 일일 타임라인 (계획 vs 실제)")
-    target_date = st.date_input("조회할 날짜를 선택하세요 (달력과 연동됨)", value=datetime(2027, 5, 5))
+    # [요청 1&3: 달력 아래 일일 상세 일정 융합 탑재]
+    st.write("---")
+    st.subheader("⏱️ 일일 상세 일정")
+    target_date = st.date_input("조회 및 계획할 날짜를 선택하세요", value=datetime(2027, 4, 30), key="daily_target_date")
     
     current_country, current_city = None, None
     for _, row in df[df['카테고리'] == '도시'].iterrows():
@@ -270,15 +252,11 @@ with tab3:
     if current_country and current_city:
         code = get_country_code(current_country)
         flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:36px; border-radius:4px; vertical-align:middle; margin-right:10px;'>" if code else "📍"
-        st.markdown(f"### {flag_img} **{current_country} {current_city} 체류 중** ({target_date.strftime('%Y년 %m월 %d일')})", unsafe_allow_html=True)
+        st.markdown(f"#### {flag_img} **{current_country} {current_city} 체류 중** ({target_date.strftime('%Y-%m-%d')})", unsafe_allow_html=True)
     else:
-        st.warning("선택하신 날짜에는 체류 중인 도시가 없습니다.")
+        st.warning("선택하신 날짜에는 설정된 체류 도시가 없습니다.")
 
-    st.write("---")
-    
-    # [수정] 계획과 실제를 나란히 입력할 수 있는 테이블 구조화
     saved_schedule = df[(df['카테고리'] == '일정') & (df['시작일'] == str(target_date))]
-    
     times = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(24) for m in (0, 30)]
     daily_df = pd.DataFrame({
         "시간": times,
@@ -294,27 +272,24 @@ with tab3:
                 daily_df.loc[idx, "계획 지출액"] = pd.to_numeric(r.get("계획 비용", 0), errors='coerce')
                 daily_df.loc[idx, "실제 방문"] = str(r.get("실제 일정", ""))
                 daily_df.loc[idx, "실제 지출액"] = pd.to_numeric(r.get("실제 비용", 0), errors='coerce')
-                
     daily_df.fillna(0, inplace=True)
 
-    col_tl_plan, col_tl_act = st.columns(2)
-    
-    st.markdown("**🕒 타임라인 및 비용 입력 (표를 직접 클릭하여 수정하세요)**")
     edited_daily = st.data_editor(
         daily_df,
         use_container_width=True,
         hide_index=True,
-        height=600,
+        height=500,
         column_config={
             "시간": st.column_config.TextColumn("시간", disabled=True),
-            "계획 일정": st.column_config.TextColumn("📝 계획 일정 (할 일)"),
-            "계획 지출액": st.column_config.NumberColumn("예상 비용(원)", min_value=0, step=1000, format="%d ₩"),
-            "실제 방문": st.column_config.TextColumn("📸 실제 일정 (방문함)"),
-            "실제 지출액": st.column_config.NumberColumn("실제 비용(원)", min_value=0, step=1000, format="%d ₩")
-        }
+            "계획 일정": st.column_config.TextColumn("📝 계획 일정"),
+            "계획 지출액": st.column_config.NumberColumn("예상 비용(원)", min_value=0, format="%d ₩"),
+            "실제 방문": st.column_config.TextColumn("📸 실제 일정"),
+            "실제 지출액": st.column_config.NumberColumn("실제 비용(원)", min_value=0, format="%d ₩")
+        },
+        key="daily_timeline_editor"
     )
     
-    if st.button("💾 일일 상세 일정 및 비용 저장", type="primary", use_container_width=True):
+    if st.button("💾 일일 상세 일정 및 비용 저장", type="primary", use_container_width=True, key="save_daily_btn"):
         try:
             to_save = edited_daily[(edited_daily["계획 일정"].str.strip() != "") | (edited_daily["계획 지출액"] > 0) | (edited_daily["실제 방문"].str.strip() != "") | (edited_daily["실제 지출액"] > 0)]
             new_main_df = df[~((df["카테고리"] == "일정") & (df["시작일"] == str(target_date)))].copy()
@@ -322,28 +297,43 @@ with tab3:
             append_list = []
             for _, r in to_save.iterrows():
                 append_list.append({
-                    "국가": current_country if current_country else "",
-                    "도시": current_city if current_city else "",
+                    "국가": current_country if current_country else "", "도시": current_city if current_city else "",
                     "장소명": r["계획 일정"], "카테고리": "일정", "시작일": str(target_date),
-                    "시간": r["시간"], "계획 비용": r["계획 지출액"],
-                    "실제 일정": r["실제 방문"], "실제 비용": r["실제 지출액"],
+                    "시간": r["시간"], "계획 비용": r["계획 지출액"], "실제 일정": r["실제 방문"], "실제 비용": r["실제 지출액"],
                     "총 예산": df["총 예산"].max() if "총 예산" in df.columns and not pd.isna(df["총 예산"].max()) else 0
                 })
-            
             if append_list: new_main_df = pd.concat([new_main_df, pd.DataFrame(append_list)], ignore_index=True)
             conn.update(spreadsheet=SHEET_URL, data=new_main_df)
             st.success("상세 일정이 성공적으로 저장되었습니다!")
             st.cache_data.clear(); st.rerun()
         except Exception as e: st.error("저장에 실패했습니다.")
 
-# ==========================================
-# [신규 시트 4] 여행 가계부 (전체 예산 관리)
-# ==========================================
-with tab4:
-    st.subheader("💰 전체 여행 가계부")
-    st.info("이곳에서 설정한 총 예산을 바탕으로, '일일 상세 일정(3번째 탭)'에 입력된 계획/실제 비용이 자동 합산되어 남은 예산이 계산됩니다.")
+    st.write("---")
     
-    # 1. 총 예산 로드 및 설정
+    # [요청 2: 보였다가 안보였다 하는 기능(Expander 토글 처리 완료)]
+    with st.expander("📝 체류 기간 설정 (클릭하여 열기)", expanded=False):
+        schedule_editor_df = df[df["카테고리"] == "도시"][["국가", "도시", "시작일", "종료일"]].copy()
+        schedule_editor_df["시작일"] = pd.to_datetime(schedule_editor_df["시작일"], errors="coerce").dt.date
+        schedule_editor_df["종료일"] = pd.to_datetime(schedule_editor_df["종료일"], errors="coerce").dt.date
+        
+        edited_schedule = st.data_editor(schedule_editor_df, use_container_width=True, hide_index=True, column_config={"시작일": st.column_config.DateColumn("시작일 (YYYY-MM-DD)"), "종료일": st.column_config.DateColumn("종료일 (YYYY-MM-DD)")})
+        if st.button("💾 체류 일정 저장", key="save_schedule_btn"):
+            try:
+                updated_df = df.copy()
+                for idx, row in edited_schedule.iterrows():
+                    mask = (updated_df["국가"] == row["국가"]) & (updated_df["도시"] == row["도시"]) & (updated_df["카테고리"] == "도시")
+                    s_val, e_val = row["시작일"], row["종료일"]
+                    updated_df.loc[mask, "시작일"] = s_val.strftime("%Y-%m-%d") if pd.notnull(s_val) and hasattr(s_val, 'strftime') else ""
+                    updated_df.loc[mask, "종료일"] = e_val.strftime("%Y-%m-%d") if pd.notnull(e_val) and hasattr(e_val, 'strftime') else ""
+                conn.update(spreadsheet=SHEET_URL, data=updated_df)
+                st.cache_data.clear(); st.rerun()
+            except Exception as e: st.error("저장 실패.")
+
+# ==========================================
+# [시트 3] 여행 가계부 (전체 예산 연동)
+# ==========================================
+with tab3:
+    st.subheader("💰 전체 여행 가계부")
     current_budget = 0
     if not df.empty and "총 예산" in df.columns:
         loaded_budget = pd.to_numeric(df["총 예산"], errors='coerce').max()
@@ -356,14 +346,9 @@ with tab4:
                 df["총 예산"] = new_budget
                 conn.update(spreadsheet=SHEET_URL, data=df)
                 st.success("총 예산이 업데이트되었습니다!")
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.warning("데이터가 없습니다. 장소를 먼저 등록해주세요.")
-                
+                st.cache_data.clear(); st.rerun()
+
     st.write("---")
-    
-    # 2. 비용 합산 계산 (카테고리가 '일정'인 항목들의 총합)
     schedule_rows = df[df["카테고리"] == "일정"]
     total_planned_cost = pd.to_numeric(schedule_rows["계획 비용"], errors='coerce').sum()
     total_actual_cost = pd.to_numeric(schedule_rows["실제 비용"], errors='coerce').sum()
@@ -371,27 +356,15 @@ with tab4:
     remain_planned = current_budget - total_planned_cost
     remain_actual = current_budget - total_actual_cost
     
-    # 3. 현황 대시보드 출력
     col_b1, col_b2 = st.columns(2)
-    
     with col_b1:
         st.markdown("### 📝 계획 예산 현황")
-        st.metric(label="현재까지 계획된 지출 총액", value=f"{total_planned_cost:,.0f} 원")
-        
-        # 예산 초과 시 빨간색 경고 표시
-        if remain_planned < 0:
-            st.error(f"🚨 예산 초과! ( {-remain_planned:,.0f} 원 부족 )")
-        else:
-            st.success(f"✅ 남은 계획 예산: {remain_planned:,.0f} 원")
+        st.metric(label="계획 지출 총액", value=f"{total_planned_cost:,.0f} 원")
+        if remain_planned < 0: st.error(f"🚨 예산 초과! ( {-remain_planned:,.0f} 원 부족 )")
+        else: st.success(f"✅ 남은 계획 예산: {remain_planned:,.0f} 원")
 
     with col_b2:
         st.markdown("### 📸 실제 지출 현황")
-        st.metric(label="현재까지 실제 사용한 총액", value=f"{total_actual_cost:,.0f} 원")
-        
-        if remain_actual < 0:
-            st.error(f"🚨 실제 예산 초과! ( {-remain_actual:,.0f} 원 빚짐 )")
-        else:
-            st.info(f"💵 여행 중 남은 돈: {remain_actual:,.0f} 원")
-            
-    st.write("---")
-    st.markdown("💡 **Tip:** 3번째 탭(⏱️ 일일 상세 일정)에서 각 날짜별로 비용을 세세하게 입력할수록 가계부가 정확해집니다!")
+        st.metric(label="실제 사용 총액", value=f"{total_actual_cost:,.0f} 원")
+        if remain_actual < 0: st.error(f"🚨 실제 예산 초과! ( {-remain_actual:,.0f} 원 빚짐 )")
+        else: st.info(f"💵 여행 중 남은 돈: {remain_actual:,.0f} 원")
