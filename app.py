@@ -12,7 +12,7 @@ from geopy.extra.rate_limiter import RateLimiter
 import calendar
 from datetime import datetime, timedelta
 
-# [수정] 달력의 시작 요일을 '일요일'로 강제 고정 (한국식 달력)
+# 달력 시작 요일을 일요일로 고정 (한국식)
 calendar.setfirstweekday(calendar.SUNDAY)
 
 # 1. 페이지 설정
@@ -181,7 +181,7 @@ with tab1:
                 st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# [시트 2] 체류 일정 (달력 + 일일 상세)
+# [시트 2] 체류 일정 (달력 + 일일 상세 융합)
 # ==========================================
 with tab2:
     st.subheader("📅 여행 달력")
@@ -234,28 +234,72 @@ with tab2:
         html_cal += "</tr>"
     html_cal += "</table>"
     st.markdown(html_cal, unsafe_allow_html=True)
-    
     st.write("---")
-    st.subheader("⏱️ 일일 상세 일정")
-    target_date = st.date_input("조회 및 계획할 날짜를 선택하세요 (달력 위젯)", value=datetime(2027, 4, 30), key="daily_target_date")
     
-    current_country, current_city = None, None
+    # ==========================================
+    # [핵심 로직] 일일 상세 일정 & 겹침(Overlap) 국가 표시
+    # ==========================================
+    st.subheader("⏱️ 일일 상세 일정")
+    
+    # 방문 예정지 탭에서 선택한 국가가 있으면 그 국가의 시작일을 디폴트 날짜로 당겨옴
+    default_target_date = datetime(2027, 4, 30).date()
+    if st.session_state.last_country != "유럽 전체 보기":
+        try:
+            s_val = df[(df['국가'] == st.session_state.last_country) & (df['카테고리'] == '도시')]['시작일'].dropna().iloc[0]
+            if s_val and str(s_val).strip() not in ['', 'nan', 'nat', 'none']:
+                default_target_date = pd.to_datetime(s_val).date()
+        except: pass
+
+    target_date = st.date_input("조회 및 계획할 날짜를 선택하세요 (1번 탭에서 국가를 고르면 날짜가 자동 연동됩니다)", value=default_target_date, key="daily_target_date")
+    
+    # 선택된 날짜에 겹치는 국가/도시 '모두' 찾기
+    overlapping_places = []
     for _, row in df[df['카테고리'] == '도시'].iterrows():
         s_date, e_date = str(row.get('시작일', '')).strip(), str(row.get('종료일', '')).strip()
         if s_date and e_date and s_date.lower() not in ['none', 'nat', 'nan']:
             try:
                 s_dt, e_dt = pd.to_datetime(s_date).date(), pd.to_datetime(e_date).date()
                 if s_dt <= target_date <= e_dt:
-                    current_country, current_city = row['국가'], row['도시']
-                    break
+                    overlapping_places.append({'country': row['국가'], 'city': row['도시']})
             except: pass
 
-    if current_country and current_city:
-        code = get_country_code(current_country)
-        flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:36px; border-radius:4px; vertical-align:middle; margin-right:10px;'>" if code else "📍"
-        st.markdown(f"#### {flag_img} **{current_country} {current_city} 체류 중** ({target_date.strftime('%Y-%m-%d')})", unsafe_allow_html=True)
+    current_country, current_city = "", ""
+    if overlapping_places:
+        header_html = ""
+        c_names, city_names = [], []
+        
+        # 겹치는 국가들을 순회하며 아이콘과 시차 정보 렌더링
+        for i, place in enumerate(overlapping_places):
+            cntry = place['country']
+            cty = place['city']
+            code = get_country_code(cntry)
+            
+            # 현지 시간(시차) 매핑 (4월 말 기준 유럽 서머타임 적용 상태)
+            tz_map = {
+                "it": "한국 -7시간", "fr": "한국 -7시간", "es": "한국 -7시간", "ch": "한국 -7시간", 
+                "de": "한국 -7시간", "at": "한국 -7시간", "cz": "한국 -7시간", "gb": "한국 -8시간", 
+                "gr": "한국 -6시간", "ae": "한국 -5시간"
+            }
+            tz_txt = tz_map.get(code, "")
+            
+            flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:36px; border-radius:4px; vertical-align:middle; margin-right:5px;'>" if code else "📍"
+            header_html += f"{flag_img} <b>{cntry} {cty}</b> <span style='font-size:14px; color:gray;'>({tz_txt})</span>"
+            
+            c_names.append(cntry)
+            city_names.append(cty)
+            
+            # 국가가 2개 이상일 경우 비행기 이모지로 연결
+            if i < len(overlapping_places) - 1:
+                header_html += " &nbsp; ✈️ &nbsp; "
+        
+        st.markdown(f"#### {header_html} 체류 중 ({target_date.strftime('%Y-%m-%d')})", unsafe_allow_html=True)
+        st.caption("💡 팁: 두 국가를 이동하는 날(오버랩)인 경우, 타임라인을 출발지와 도착지의 현지 시간에 맞춰 자유롭게 기록하세요!")
+        
+        # 저장용 문자열 합치기 (예: "UAE / 영국")
+        current_country = " / ".join(c_names)
+        current_city = " / ".join(city_names)
     else:
-        st.warning("선택하신 날짜에는 설정된 체류 도시가 없습니다.")
+        st.warning("선택하신 날짜에는 설정된 체류 도시가 없습니다. 아래 [체류 기간 설정]을 먼저 확인해주세요.")
 
     saved_schedule = df[(df['카테고리'] == '일정') & (df['시작일'] == str(target_date))]
     times = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(24) for m in (0, 30)]
