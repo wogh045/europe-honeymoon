@@ -12,11 +12,14 @@ from geopy.extra.rate_limiter import RateLimiter
 import calendar
 from datetime import datetime, timedelta
 
-# 1. 페이지 설정 (제목을 🛫 로 변경)
+# [수정] 달력의 시작 요일을 '일요일'로 강제 고정 (한국식 달력)
+calendar.setfirstweekday(calendar.SUNDAY)
+
+# 1. 페이지 설정
 st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v27", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v28", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -65,14 +68,13 @@ except Exception as e:
     st.error(f"연결 오류: {e}")
     st.stop()
 
-# --- 메인 UI (요청 1: 타이틀을 오직 이륙 이모지로만 간소화) ---
+# --- 메인 UI ---
 st.title("🛫")
 
-# 3개의 탭 구조로 통합 (기존 상세 일정 탭 삭제 후 체류 일정 내부로 융합)
 tab1, tab2, tab3 = st.tabs(["📍 방문 예정지", "📅 체류 일정", "💰 여행 가계부"])
 
 # ==========================================
-# [시트 1] 방문 예정지 (지도/장소 관리)
+# [시트 1] 방문 예정지
 # ==========================================
 with tab1:
     with st.expander("➕ 도시 추가", expanded=False):
@@ -179,13 +181,13 @@ with tab1:
                 st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# [시트 2] 체류 일정 + 일일 상세 일정 (융합 탭)
+# [시트 2] 체류 일정 (달력 + 일일 상세)
 # ==========================================
 with tab2:
     st.subheader("📅 여행 달력")
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
     with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1, key="cal_year")
-    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 예시 편의상 4월 기본 지정
+    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 4월 기본 지정
     st.write("---")
     
     city_df = df[df['카테고리'] == '도시'].copy()
@@ -233,10 +235,9 @@ with tab2:
     html_cal += "</table>"
     st.markdown(html_cal, unsafe_allow_html=True)
     
-    # [요청 1&3: 달력 아래 일일 상세 일정 융합 탑재]
     st.write("---")
     st.subheader("⏱️ 일일 상세 일정")
-    target_date = st.date_input("조회 및 계획할 날짜를 선택하세요", value=datetime(2027, 4, 30), key="daily_target_date")
+    target_date = st.date_input("조회 및 계획할 날짜를 선택하세요 (달력 위젯)", value=datetime(2027, 4, 30), key="daily_target_date")
     
     current_country, current_city = None, None
     for _, row in df[df['카테고리'] == '도시'].iterrows():
@@ -310,7 +311,6 @@ with tab2:
 
     st.write("---")
     
-    # [요청 2: 보였다가 안보였다 하는 기능(Expander 토글 처리 완료)]
     with st.expander("📝 체류 기간 설정 (클릭하여 열기)", expanded=False):
         schedule_editor_df = df[df["카테고리"] == "도시"][["국가", "도시", "시작일", "종료일"]].copy()
         schedule_editor_df["시작일"] = pd.to_datetime(schedule_editor_df["시작일"], errors="coerce").dt.date
@@ -330,7 +330,7 @@ with tab2:
             except Exception as e: st.error("저장 실패.")
 
 # ==========================================
-# [시트 3] 여행 가계부 (전체 예산 연동)
+# [시트 3] 여행 가계부
 # ==========================================
 with tab3:
     st.subheader("💰 전체 여행 가계부")
