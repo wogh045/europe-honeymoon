@@ -19,7 +19,7 @@ calendar.setfirstweekday(calendar.SUNDAY)
 st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v28", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v29", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -234,14 +234,10 @@ with tab2:
         html_cal += "</tr>"
     html_cal += "</table>"
     st.markdown(html_cal, unsafe_allow_html=True)
-    st.write("---")
     
-    # ==========================================
-    # [핵심 로직] 일일 상세 일정 & 겹침(Overlap) 국가 표시
-    # ==========================================
+    st.write("---")
     st.subheader("⏱️ 일일 상세 일정")
     
-    # 방문 예정지 탭에서 선택한 국가가 있으면 그 국가의 시작일을 디폴트 날짜로 당겨옴
     default_target_date = datetime(2027, 4, 30).date()
     if st.session_state.last_country != "유럽 전체 보기":
         try:
@@ -250,9 +246,8 @@ with tab2:
                 default_target_date = pd.to_datetime(s_val).date()
         except: pass
 
-    target_date = st.date_input("조회 및 계획할 날짜를 선택하세요 (1번 탭에서 국가를 고르면 날짜가 자동 연동됩니다)", value=default_target_date, key="daily_target_date")
+    target_date = st.date_input("조회 및 계획할 날짜를 선택하세요", value=default_target_date, key="daily_target_date")
     
-    # 선택된 날짜에 겹치는 국가/도시 '모두' 찾기
     overlapping_places = []
     for _, row in df[df['카테고리'] == '도시'].iterrows():
         s_date, e_date = str(row.get('시작일', '')).strip(), str(row.get('종료일', '')).strip()
@@ -268,13 +263,10 @@ with tab2:
         header_html = ""
         c_names, city_names = [], []
         
-        # 겹치는 국가들을 순회하며 아이콘과 시차 정보 렌더링
         for i, place in enumerate(overlapping_places):
-            cntry = place['country']
-            cty = place['city']
+            cntry, cty = place['country'], place['city']
             code = get_country_code(cntry)
             
-            # 현지 시간(시차) 매핑 (4월 말 기준 유럽 서머타임 적용 상태)
             tz_map = {
                 "it": "한국 -7시간", "fr": "한국 -7시간", "es": "한국 -7시간", "ch": "한국 -7시간", 
                 "de": "한국 -7시간", "at": "한국 -7시간", "cz": "한국 -7시간", "gb": "한국 -8시간", 
@@ -285,21 +277,15 @@ with tab2:
             flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:36px; border-radius:4px; vertical-align:middle; margin-right:5px;'>" if code else "📍"
             header_html += f"{flag_img} <b>{cntry} {cty}</b> <span style='font-size:14px; color:gray;'>({tz_txt})</span>"
             
-            c_names.append(cntry)
-            city_names.append(cty)
+            c_names.append(cntry); city_names.append(cty)
             
-            # 국가가 2개 이상일 경우 비행기 이모지로 연결
             if i < len(overlapping_places) - 1:
                 header_html += " &nbsp; ✈️ &nbsp; "
         
         st.markdown(f"#### {header_html} 체류 중 ({target_date.strftime('%Y-%m-%d')})", unsafe_allow_html=True)
-        st.caption("💡 팁: 두 국가를 이동하는 날(오버랩)인 경우, 타임라인을 출발지와 도착지의 현지 시간에 맞춰 자유롭게 기록하세요!")
-        
-        # 저장용 문자열 합치기 (예: "UAE / 영국")
-        current_country = " / ".join(c_names)
-        current_city = " / ".join(city_names)
+        current_country, current_city = " / ".join(c_names), " / ".join(city_names)
     else:
-        st.warning("선택하신 날짜에는 설정된 체류 도시가 없습니다. 아래 [체류 기간 설정]을 먼저 확인해주세요.")
+        st.warning("선택하신 날짜에는 설정된 체류 도시가 없습니다.")
 
     saved_schedule = df[(df['카테고리'] == '일정') & (df['시작일'] == str(target_date))]
     times = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(24) for m in (0, 30)]
@@ -319,6 +305,7 @@ with tab2:
                 daily_df.loc[idx, "실제 지출액"] = pd.to_numeric(r.get("실제 비용", 0), errors='coerce')
     daily_df.fillna(0, inplace=True)
 
+    # [핵심 수정] 날짜(target_date)를 표의 고유 키(key)에 포함시켜 잔상 오류 완벽 해결
     edited_daily = st.data_editor(
         daily_df,
         use_container_width=True,
@@ -331,10 +318,11 @@ with tab2:
             "실제 방문": st.column_config.TextColumn("📸 실제 일정"),
             "실제 지출액": st.column_config.NumberColumn("실제 비용(원)", min_value=0, format="%d ₩")
         },
-        key="daily_timeline_editor"
+        key=f"daily_editor_{target_date}" 
     )
     
-    if st.button("💾 일일 상세 일정 및 비용 저장", type="primary", use_container_width=True, key="save_daily_btn"):
+    # [핵심 수정] 저장 버튼에도 날짜 키를 포함하여 꼬임 방지
+    if st.button("💾 일일 상세 일정 및 비용 저장", type="primary", use_container_width=True, key=f"save_daily_btn_{target_date}"):
         try:
             to_save = edited_daily[(edited_daily["계획 일정"].str.strip() != "") | (edited_daily["계획 지출액"] > 0) | (edited_daily["실제 방문"].str.strip() != "") | (edited_daily["실제 지출액"] > 0)]
             new_main_df = df[~((df["카테고리"] == "일정") & (df["시작일"] == str(target_date)))].copy()
