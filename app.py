@@ -19,7 +19,7 @@ calendar.setfirstweekday(calendar.SUNDAY)
 st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v32", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v33", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -27,8 +27,10 @@ if 'search_result' not in st.session_state: st.session_state.search_result = Non
 if 'last_clicked' not in st.session_state: st.session_state.last_clicked = None
 if 'last_country' not in st.session_state: st.session_state.last_country = "유럽 전체 보기"
 if 'last_city' not in st.session_state: st.session_state.last_city = "전체 보기"
-if 'selected_calendar_date' not in st.session_state:
-    st.session_state.selected_calendar_date = datetime(2027, 4, 30).date()
+
+# [핵심] 달력 클릭 시 타겟 날짜를 저장할 세션
+if 'daily_target_date' not in st.session_state:
+    st.session_state.daily_target_date = datetime(2027, 4, 30).date()
 
 KNOWN_CITIES = {
     "로마": (41.9028, 12.4964), "파리": (48.8566, 2.3522), "피렌체": (43.7696, 11.2558),
@@ -183,7 +185,7 @@ with tab1:
                 st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# [시트 2] 체류 일정
+# [시트 2] 체류 일정 (클릭형 스마트 달력)
 # ==========================================
 with tab2:
     st.subheader("📅 여행 달력")
@@ -192,7 +194,7 @@ with tab2:
     with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 4월 기본
     st.write("---")
     
-    # [복구] 기존의 진짜 HTML 달력 + 국기 렌더링 로직 복원
+    # 1. 국기 일정 수집 로직
     city_df = df[df['카테고리'] == '도시'].copy()
     flag_schedule = {}
     
@@ -203,8 +205,8 @@ with tab2:
             try:
                 start_dt, end_dt = pd.to_datetime(s_date).date(), pd.to_datetime(e_date).date()
                 code = get_country_code(country_name)
-                # 실제 국기 이미지를 보여주는 HTML 구문
-                flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:30px; border-radius:3px; box-shadow:1px 1px 3px rgba(0,0,0,0.3); margin-top:5px;'>" if code else "📍"
+                # 오리지널 예쁜 국기 이미지 HTML
+                flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:30px; border-radius:3px; box-shadow:1px 1px 3px rgba(0,0,0,0.3); margin-top:3px; margin-bottom:3px;'>" if code else "📍"
                 curr_dt = start_dt
                 while curr_dt <= end_dt:
                     if curr_dt.year == sel_year and curr_dt.month == sel_month:
@@ -215,56 +217,85 @@ with tab2:
                     curr_dt += timedelta(days=1)
             except: pass 
 
+    # 2. [핵심] 기존 달력 표의 감성을 완벽하게 재현한 클릭형 그리드
     cal = calendar.monthcalendar(sel_year, sel_month)
-    html_cal = f"""
-    <style>
-        .planner-cal {{ width: 100%; border-collapse: collapse; font-family: sans-serif; table-layout: fixed; }}
-        .planner-cal th {{ background-color: rgba(128,128,128,0.1); padding: 10px; border: 1px solid rgba(128,128,128,0.2); text-align: center; font-weight: bold; }}
-        .planner-cal td {{ border: 1px solid rgba(128,128,128,0.2); height: 100px; vertical-align: top; padding: 5px; text-align: center; }}
-        .cal-day-num {{ font-size: 16px; font-weight: bold; color: gray; }}
-        .cal-empty {{ background-color: rgba(128,128,128,0.05); }}
-    </style>
-    <table class="planner-cal">
-        <tr><th style='color:red;'>일</th><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style='color:blue;'>토</th></tr>
-    """
-    for week in cal:
-        html_cal += "<tr>"
-        for i, day in enumerate(week):
-            if day == 0: html_cal += "<td class='cal-empty'></td>"
-            else:
-                day_color = "red" if i == 0 else "blue" if i == 6 else "inherit"
-                flag = flag_schedule.get(day, "")
-                html_cal += f"<td><div class='cal-day-num' style='color:{day_color};'>{day}</div>{flag}</td>"
-        html_cal += "</tr>"
-    html_cal += "</table>"
-    st.markdown(html_cal, unsafe_allow_html=True)
     
+    # CSS: 카드 디자인 및 스트림릿 버튼 커스텀
+    st.markdown("""
+        <style>
+        .cal-card {
+            border: 1px solid rgba(128,128,128,0.2);
+            border-radius: 8px;
+            padding: 5px;
+            text-align: center;
+            height: 90px;
+            margin-bottom: -15px;
+        }
+        .cal-card-selected {
+            border: 2px solid #ff4b4b;
+            background-color: rgba(255, 75, 75, 0.05);
+            border-radius: 8px;
+            padding: 5px;
+            text-align: center;
+            height: 90px;
+            margin-bottom: -15px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # 요일 헤더
+    h_cols = st.columns(7)
+    for i, d in enumerate(["일", "월", "화", "수", "목", "금", "토"]):
+        color = "red" if i==0 else "blue" if i==6 else "gray"
+        h_cols[i].markdown(f"<div style='text-align:center; font-weight:bold; font-size:16px; color:{color}; border-bottom:2px solid #ddd; padding-bottom:5px;'>{d}</div>", unsafe_allow_html=True)
+
+    st.write("") # 간격
+    
+    # 날짜와 국기 그리고 선택버튼을 포함하는 카드 출력
+    for week in cal:
+        w_cols = st.columns(7)
+        for i, day in enumerate(week):
+            with w_cols[i]:
+                if day != 0:
+                    day_color = "red" if i == 0 else "blue" if i == 6 else "black"
+                    flags = flag_schedule.get(day, "<div style='height:36px;'></div>") # 국기가 없을 때 공간 확보
+                    is_selected = (st.session_state.daily_target_date == datetime(sel_year, sel_month, day).date())
+                    card_class = "cal-card-selected" if is_selected else "cal-card"
+                    
+                    # 카드 상단부 (날짜 + 국기 이미지)
+                    st.markdown(f"""
+                        <div class='{card_class}'>
+                            <div style='font-size:16px; font-weight:bold; color:{day_color};'>{day}</div>
+                            <div>{flags}</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # 카드 하단부 (클릭 트리거)
+                    btn_label = "🎯 선택됨" if is_selected else "👆"
+                    if st.button(btn_label, key=f"btn_cal_{sel_year}_{sel_month}_{day}", use_container_width=True, type="primary" if is_selected else "secondary"):
+                        st.session_state.daily_target_date = datetime(sel_year, sel_month, day).date()
+                        st.rerun()
+
     st.write("---")
     
     # ==========================================
     # [일일 상세 일정 네비게이터 & 타임라인]
     # ==========================================
-    st.subheader("⏱️ 일일 상세 일정")
+    target_date = st.session_state.daily_target_date
+    weekday_kr = ["월", "화", "수", "목", "금", "토", "일"][target_date.weekday()]
     
-    # 날짜 네비게이션 컨트롤 바
-    nav_c1, nav_c2, nav_c3 = st.columns([1.5, 7, 1.5])
+    # 깔끔한 네비게이션 헤더
+    st.markdown(f"<h3 style='text-align:center; color:#333;'>⏱️ {target_date.strftime('%Y년 %m월 %d일')} ({weekday_kr}) 상세 일정</h3>", unsafe_allow_html=True)
     
+    nav_c1, nav_c2, nav_c3 = st.columns([1, 8, 1])
     with nav_c1:
-        if st.button("◀ 이전 날", use_container_width=True):
-            st.session_state.selected_calendar_date -= timedelta(days=1)
+        if st.button("◀ 이전", use_container_width=True):
+            st.session_state.daily_target_date -= timedelta(days=1)
             st.rerun()
     with nav_c3:
-        if st.button("다음 날 ▶", use_container_width=True):
-            st.session_state.selected_calendar_date += timedelta(days=1)
+        if st.button("다음 ▶", use_container_width=True):
+            st.session_state.daily_target_date += timedelta(days=1)
             st.rerun()
-    with nav_c2:
-        st.session_state.selected_calendar_date = st.date_input(
-            "달력을 보며 일정을 작성할 날짜를 선택하세요", 
-            value=st.session_state.selected_calendar_date,
-            key="daily_target_date_input"
-        )
-        
-    target_date = st.session_state.selected_calendar_date
 
     # 오버랩 국가 체류 정보 확인
     overlapping_places = []
@@ -301,10 +332,10 @@ with tab2:
             if i < len(overlapping_places) - 1:
                 header_html += " &nbsp; ✈️ &nbsp; "
         
-        st.markdown(f"<div style='text-align:center; margin-top:10px; margin-bottom:15px;'>{header_html}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center; margin-top:5px; margin-bottom:15px; background-color:#f0f2f6; padding:10px; border-radius:10px;'>{header_html} 체류 중</div>", unsafe_allow_html=True)
         current_country, current_city = " / ".join(c_names), " / ".join(city_names)
     else:
-        st.warning("선택하신 날짜에는 설정된 체류 도시가 없습니다. 아래 [체류 기간 설정]에서 날짜를 지정해보세요.")
+        st.warning("선택하신 날짜에는 등록된 체류 도시가 없습니다. 아래 [체류 기간 설정]에서 날짜를 지정해보세요.")
 
     saved_schedule = df[(df['카테고리'] == '일정') & (df['시작일'] == str(target_date))]
     times = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(24) for m in (0, 30)]
