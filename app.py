@@ -19,7 +19,7 @@ calendar.setfirstweekday(calendar.SUNDAY)
 st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v34", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v35", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -183,35 +183,35 @@ with tab1:
                 st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# [시트 2] 체류 일정 (투명 오버레이 달력 + 상세)
+# [시트 2] 체류 일정 (투명 버튼 클릭형 달력)
 # ==========================================
 with tab2:
     st.subheader("📅 여행 달력")
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
     with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1, key="cal_year")
-    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month")
+    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 4월 기본
     st.write("---")
     
-    # [핵심] 투명 유리 버튼을 만들어주는 CSS 코드 삽입
+    # [핵심] 글자와 모양을 완벽히 숨긴 '투명 클릭 코팅'을 사각칸 위에 씌우는 마법의 CSS
     st.markdown("""
         <style>
-        /* 버튼을 투명하게 만들고 사각칸 위로 끌어올림 */
-        div[title="날짜선택"] button, button[title="날짜선택"] {
-            margin-top: -105px !important;
-            height: 105px !important;
+        button[title="cal_click_layer"] {
+            position: absolute !important;
+            height: 90px !important;
             background-color: transparent !important;
             border: none !important;
             box-shadow: none !important;
             color: transparent !important;
-            z-index: 10;
+            padding: 0 !important;
+            margin-top: -15px !important;
+            z-index: 99 !important;
         }
-        /* 마우스를 올렸을 때 살짝 빨간 배경이 나타나 클릭 가능함을 알림 */
-        div[title="날짜선택"] button:hover, button[title="날짜선택"]:hover {
-            background-color: rgba(255, 0, 0, 0.05) !important;
+        button[title="cal_click_layer"]:hover {
+            border: 2px solid red !important;
+            background-color: rgba(255,0,0,0.05) !important;
             border-radius: 8px !important;
         }
-        /* 버튼 내부의 텍스트 원천 차단 */
-        div[title="날짜선택"] button p, button[title="날짜선택"] p {
+        button[title="cal_click_layer"] p {
             display: none !important;
         }
         </style>
@@ -220,7 +220,6 @@ with tab2:
     city_df = df[df['카테고리'] == '도시'].copy()
     flag_schedule = {}
     
-    # 국기 이미지 수집 로직
     for _, row in city_df.iterrows():
         s_date, e_date = str(row.get('시작일', '')).strip(), str(row.get('종료일', '')).strip()
         country_name = row.get('국가', '')
@@ -228,7 +227,8 @@ with tab2:
             try:
                 start_dt, end_dt = pd.to_datetime(s_date).date(), pd.to_datetime(e_date).date()
                 code = get_country_code(country_name)
-                flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:30px; border-radius:3px; box-shadow:1px 1px 3px rgba(0,0,0,0.3); margin-top:3px; margin-bottom:3px;'>" if code else "📍"
+                # 오리지널 예쁜 국기 이미지
+                flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:32px; border-radius:3px; box-shadow:1px 1px 3px rgba(0,0,0,0.3); margin-top:2px; margin-bottom:2px;'>" if code else "📍"
                 curr_dt = start_dt
                 while curr_dt <= end_dt:
                     if curr_dt.year == sel_year and curr_dt.month == sel_month:
@@ -239,43 +239,39 @@ with tab2:
                     curr_dt += timedelta(days=1)
             except: pass 
 
-    # 요일 헤더 그리기
+    # 요일 헤더
     h_cols = st.columns(7)
-    for i, d in enumerate(["일", "월", "화", "수", "목", "금", "토"]):
-        color = "red" if i==0 else "blue" if i==6 else "gray"
-        h_cols[i].markdown(f"<div style='text-align:center; font-weight:bold; font-size:16px; color:{color}; border-bottom:2px solid #ddd; padding-bottom:5px;'>{d}</div>", unsafe_allow_html=True)
-    st.write("")
+    days_title = [("일", "red"), ("월", "gray"), ("화", "gray"), ("수", "gray"), ("목", "gray"), ("금", "gray"), ("토", "blue")]
+    for idx, (d_name, color) in enumerate(days_title):
+        h_cols[idx].markdown(f"<div style='text-align:center; font-weight:bold; font-size:16px; color:{color}; padding-bottom:5px;'>{d_name}</div>", unsafe_allow_html=True)
 
     cal = calendar.monthcalendar(sel_year, sel_month)
     
-    # 달력 사각칸 그리기
     for week in cal:
         w_cols = st.columns(7)
         for i, day in enumerate(week):
             with w_cols[i]:
-                if day != 0:
+                if day == 0:
+                    st.markdown("<div style='height: 90px; background-color: rgba(128,128,128,0.05); border-radius: 8px;'></div>", unsafe_allow_html=True)
+                else:
                     day_color = "red" if i == 0 else "blue" if i == 6 else "black"
-                    flags = flag_schedule.get(day, "<div style='height:36px;'></div>") # 빈칸 공간 유지
+                    flags = flag_schedule.get(day, "<div style='height:36px;'></div>")
                     
-                    # 선택된 날짜인지 확인
                     is_selected = (st.session_state.daily_target_date == datetime(sel_year, sel_month, day).date())
                     
-                    # [요청 4] 선택되면 심플하게 '빨간 테두리'만 적용
-                    if is_selected:
-                        border_style = "border: 2px solid red; background-color: rgba(255,0,0,0.02);"
-                    else:
-                        border_style = "border: 1px solid rgba(128,128,128,0.2);"
+                    # [핵심] 선택되면 빨간 테두리, 아니면 옅은 회색 테두리
+                    border = "2px solid red" if is_selected else "1px solid rgba(128,128,128,0.2)"
                     
-                    # 달력 사각칸 렌더링
+                    # 1. 오리지널 예쁜 HTML 사각칸 렌더링 (아래로 끌어내리기 위한 네거티브 마진 적용)
                     st.markdown(f"""
-                        <div style='{border_style} border-radius: 8px; padding: 5px; text-align: center; height: 85px;'>
+                        <div style='border: {border}; height: 90px; border-radius: 8px; padding: 5px; text-align: center; margin-bottom: -100px; position: relative; z-index: 1;'>
                             <div style='font-size:16px; font-weight:bold; color:{day_color};'>{day}</div>
                             <div>{flags}</div>
                         </div>
                     """, unsafe_allow_html=True)
                     
-                    # [요청 1~3] 사각칸 위를 덮는 투명 버튼 생성 (글자, 이모지 없음)
-                    if st.button(" ", help="날짜선택", key=f"btn_cal_{sel_year}_{sel_month}_{day}", use_container_width=True):
+                    # 2. 사각칸을 완벽하게 덮는 투명 버튼 (클릭 감지용)
+                    if st.button("ㅤ", help="cal_click_layer", key=f"cal_btn_{sel_year}_{sel_month}_{day}", use_container_width=True):
                         st.session_state.daily_target_date = datetime(sel_year, sel_month, day).date()
                         st.rerun()
 
@@ -286,12 +282,10 @@ with tab2:
     # ==========================================
     target_date = st.session_state.daily_target_date
     weekday_kr = ["일", "월", "화", "수", "목", "금", "토"][target_date.weekday() if target_date.weekday() == 6 else target_date.weekday() + 1]
-    if target_date.weekday() == 6: weekday_kr = "일" # python 일요일 처리
+    if target_date.weekday() == 6: weekday_kr = "일" # python 일요일 보정
     else: weekday_kr = ["월", "화", "수", "목", "금", "토"][target_date.weekday()]
     
-    st.markdown(f"<h3 style='text-align:center; color:#333;'>⏱️ {target_date.strftime('%Y년 %m월 %d일')} ({weekday_kr}) 상세 일정</h3>", unsafe_allow_html=True)
-    
-    nav_c1, nav_c2, nav_c3 = st.columns([1, 8, 1])
+    nav_c1, nav_c2, nav_c3 = st.columns([1.5, 7, 1.5])
     with nav_c1:
         if st.button("◀ 이전 날", use_container_width=True):
             st.session_state.daily_target_date -= timedelta(days=1)
@@ -300,6 +294,8 @@ with tab2:
         if st.button("다음 날 ▶", use_container_width=True):
             st.session_state.daily_target_date += timedelta(days=1)
             st.rerun()
+    with nav_c2:
+        st.markdown(f"<h3 style='text-align:center; margin:0;'>⏱️ {target_date.strftime('%Y년 %m월 %d일')} ({weekday_kr}) 상세 일정</h3>", unsafe_allow_html=True)
 
     overlapping_places = []
     for _, row in df[df['카테고리'] == '도시'].iterrows():
