@@ -19,7 +19,7 @@ calendar.setfirstweekday(calendar.SUNDAY)
 st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v29", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v30", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -181,13 +181,13 @@ with tab1:
                 st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# [시트 2] 체류 일정 (달력 + 일일 상세 융합)
+# [시트 2] 체류 일정
 # ==========================================
 with tab2:
     st.subheader("📅 여행 달력")
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
     with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1, key="cal_year")
-    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 4월 기본 지정
+    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month")
     st.write("---")
     
     city_df = df[df['카테고리'] == '도시'].copy()
@@ -295,17 +295,27 @@ with tab2:
         "실제 방문": ["" for _ in range(48)], "실제 지출액": [0 for _ in range(48)]
     })
     
+    # [핵심 수정] 빈칸 처리 시 "nan" 글자가 생기지 않도록 완벽 필터링
     if not saved_schedule.empty:
         for _, r in saved_schedule.iterrows():
             idx = daily_df[daily_df["시간"] == r["시간"]].index
             if not idx.empty:
-                daily_df.loc[idx, "계획 일정"] = str(r["장소명"])
+                # 데이터가 nan, None 등일 경우 진짜 빈칸("")으로 변경
+                plan_str = str(r.get("장소명", ""))
+                act_str = str(r.get("실제 일정", ""))
+                
+                daily_df.loc[idx, "계획 일정"] = "" if plan_str.lower() in ['nan', 'none', 'nat'] else plan_str
                 daily_df.loc[idx, "계획 지출액"] = pd.to_numeric(r.get("계획 비용", 0), errors='coerce')
-                daily_df.loc[idx, "실제 방문"] = str(r.get("실제 일정", ""))
+                
+                daily_df.loc[idx, "실제 방문"] = "" if act_str.lower() in ['nan', 'none', 'nat'] else act_str
                 daily_df.loc[idx, "실제 지출액"] = pd.to_numeric(r.get("실제 비용", 0), errors='coerce')
-    daily_df.fillna(0, inplace=True)
+                
+    # NaN이 있는 숫자 칸은 0으로, 글자 칸은 ""로 채우기
+    daily_df["계획 일정"] = daily_df["계획 일정"].fillna("")
+    daily_df["실제 방문"] = daily_df["실제 방문"].fillna("")
+    daily_df["계획 지출액"] = daily_df["계획 지출액"].fillna(0)
+    daily_df["실제 지출액"] = daily_df["실제 지출액"].fillna(0)
 
-    # [핵심 수정] 날짜(target_date)를 표의 고유 키(key)에 포함시켜 잔상 오류 완벽 해결
     edited_daily = st.data_editor(
         daily_df,
         use_container_width=True,
@@ -318,10 +328,9 @@ with tab2:
             "실제 방문": st.column_config.TextColumn("📸 실제 일정"),
             "실제 지출액": st.column_config.NumberColumn("실제 비용(원)", min_value=0, format="%d ₩")
         },
-        key=f"daily_editor_{target_date}" 
+        key=f"daily_editor_{target_date}"
     )
     
-    # [핵심 수정] 저장 버튼에도 날짜 키를 포함하여 꼬임 방지
     if st.button("💾 일일 상세 일정 및 비용 저장", type="primary", use_container_width=True, key=f"save_daily_btn_{target_date}"):
         try:
             to_save = edited_daily[(edited_daily["계획 일정"].str.strip() != "") | (edited_daily["계획 지출액"] > 0) | (edited_daily["실제 방문"].str.strip() != "") | (edited_daily["실제 지출액"] > 0)]
@@ -329,10 +338,17 @@ with tab2:
             
             append_list = []
             for _, r in to_save.iterrows():
+                # 저장할 때도 꼼꼼하게 빈칸 처리
+                p_plan = str(r["계획 일정"]) if pd.notna(r["계획 일정"]) else ""
+                p_act = str(r["실제 방문"]) if pd.notna(r["실제 방문"]) else ""
+                
                 append_list.append({
                     "국가": current_country if current_country else "", "도시": current_city if current_city else "",
-                    "장소명": r["계획 일정"], "카테고리": "일정", "시작일": str(target_date),
-                    "시간": r["시간"], "계획 비용": r["계획 지출액"], "실제 일정": r["실제 방문"], "실제 비용": r["실제 지출액"],
+                    "장소명": "" if p_plan.lower() in ['nan', 'none'] else p_plan, 
+                    "카테고리": "일정", "시작일": str(target_date),
+                    "시간": r["시간"], "계획 비용": r["계획 지출액"], 
+                    "실제 일정": "" if p_act.lower() in ['nan', 'none'] else p_act, 
+                    "실제 비용": r["실제 지출액"],
                     "총 예산": df["총 예산"].max() if "총 예산" in df.columns and not pd.isna(df["총 예산"].max()) else 0
                 })
             if append_list: new_main_df = pd.concat([new_main_df, pd.DataFrame(append_list)], ignore_index=True)
