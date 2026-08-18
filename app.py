@@ -19,7 +19,7 @@ calendar.setfirstweekday(calendar.SUNDAY)
 st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
-geolocator = Nominatim(user_agent="honeymoon_planner_v36", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v37", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 # 세션 상태 초기화
@@ -183,46 +183,55 @@ with tab1:
                 st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# [시트 2] 체류 일정 (투명막 오버레이 달력)
+# [시트 2] 체류 일정 (버그 완벽 수정본)
 # ==========================================
 with tab2:
     st.subheader("📅 여행 달력")
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
     with cal_c1: sel_year = st.selectbox("연도", [2026, 2027, 2028], index=1, key="cal_year")
-    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 4월 기본 지정
+    with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 4월 기본
     st.write("---")
-
-    # [핵심] 1. 달력 칼럼을 '상대 위치'로 만들고, 2. 투명 버튼을 '절대 위치'로 띄워 칸을 100% 완벽히 덮는 마법의 CSS
+    
+    # [핵심] 화면 먹통(Freeze) 버그를 완벽 해결한 안전한 CSS
+    # position: absolute를 빼고, 버튼을 위로 살짝 끌어당겨 덮어씌우는 '네거티브 마진' 기법을 사용했습니다.
     st.markdown("""
         <style>
-        /* 달력의 7개 열(Column) 위치 기준점 설정 */
-        div[data-testid="column"] {
-            position: relative;
-        }
-        /* 버튼을 숨기고 칸 전체를 완벽하게 덮어씌움 */
-        div.element-container:has(.cal-btn-marker) + div.element-container {
-            position: absolute !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100% !important;
-            height: 100% !important;
+        .cal-marker { width:0; height:0; overflow:hidden; opacity:0; }
+        
+        /* 버튼을 감싸는 컨테이너를 위로 106px 끌어올려서 HTML 달력 칸을 덮어씌움 */
+        div.element-container:has(.cal-marker) + div.element-container {
+            margin-top: -106px !important; 
             z-index: 10 !important;
-            opacity: 0 !important; /* 버튼 완전 투명화 */
         }
-        div.element-container:has(.cal-btn-marker) + div.element-container button {
+        
+        /* 버튼 디자인 리셋: 색상, 테두리, 글자 모두 투명화 */
+        div.element-container:has(.cal-marker) + div.element-container button {
+            height: 90px !important;
             width: 100% !important;
-            height: 100% !important;
+            background-color: transparent !important;
+            border: 2px solid transparent !important;
+            color: transparent !important;
+            border-radius: 8px !important;
+            box-shadow: none !important;
             cursor: pointer !important;
         }
-        /* 불필요한 마커 숨김 */
-        .cal-btn-marker { display: none; }
+        
+        /* 마우스를 올렸을 때 빨간 테두리 힌트 주기 */
+        div.element-container:has(.cal-marker) + div.element-container button:hover {
+            border: 2px solid #ff4b4b !important;
+            background-color: rgba(255, 75, 75, 0.05) !important;
+        }
+        
+        /* 스트림릿 기본 버튼 글자 완전 차단 */
+        div.element-container:has(.cal-marker) + div.element-container button p {
+            display: none !important;
+        }
         </style>
     """, unsafe_allow_html=True)
-    
+
     city_df = df[df['카테고리'] == '도시'].copy()
     flag_schedule = {}
     
-    # 국기 스케줄 수집
     for _, row in city_df.iterrows():
         s_date, e_date = str(row.get('시작일', '')).strip(), str(row.get('종료일', '')).strip()
         country_name = row.get('국가', '')
@@ -231,7 +240,7 @@ with tab2:
                 start_dt, end_dt = pd.to_datetime(s_date).date(), pd.to_datetime(e_date).date()
                 code = get_country_code(country_name)
                 # 오리지널 예쁜 국기 이미지
-                flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:32px; border-radius:3px; box-shadow:1px 1px 3px rgba(0,0,0,0.2); margin:2px;'>" if code else "📍"
+                flag_img = f"<img src='https://flagcdn.com/w40/{code}.png' style='width:30px; border-radius:3px; box-shadow:1px 1px 3px rgba(0,0,0,0.3); margin-top:3px; margin-bottom:3px;'>" if code else "📍"
                 curr_dt = start_dt
                 while curr_dt <= end_dt:
                     if curr_dt.year == sel_year and curr_dt.month == sel_month:
@@ -251,32 +260,31 @@ with tab2:
 
     cal = calendar.monthcalendar(sel_year, sel_month)
     
-    # 달력 본문 렌더링
     for week in cal:
         w_cols = st.columns(7)
         for i, day in enumerate(week):
             with w_cols[i]:
                 if day == 0:
-                    st.markdown("<div style='height: 90px; background-color: #f9f9f9; border-radius: 8px;'></div>", unsafe_allow_html=True)
+                    # 날짜가 없는 빈칸
+                    st.markdown("<div style='height: 90px; background-color: rgba(128,128,128,0.05); border-radius: 8px;'></div>", unsafe_allow_html=True)
                 else:
                     is_selected = (st.session_state.daily_target_date == datetime(sel_year, sel_month, day).date())
                     day_color = "red" if i == 0 else "blue" if i == 6 else "black"
                     flags = flag_schedule.get(day, "<div style='height:36px;'></div>")
                     
-                    # [사용자 요청 완벽 반영] 선택되면 빨간 테두리, 아니면 기본 테두리. 글자나 이모지는 아예 없음!
-                    border = "2px solid red" if is_selected else "1px solid rgba(128,128,128,0.2)"
-                    bg_color = "rgba(255,0,0,0.03)" if is_selected else "white"
+                    # [사용자 요청] 선택된 날짜는 오직 '빨간 테두리'로만 표시
+                    border_css = "2px solid #ff4b4b; background-color: rgba(255, 75, 75, 0.03);" if is_selected else "1px solid rgba(128,128,128,0.2); background-color: white;"
                     
-                    # 1. 시각적인 오리지널 카드 디자인 (사용자가 눈으로 보는 것)
+                    # 1. 오리지널 디자인의 HTML 사각칸 그리기
                     st.markdown(f"""
-                        <div style='height: 90px; border: {border}; background-color: {bg_color}; border-radius: 8px; padding: 5px; text-align: center;'>
+                        <div style='height: 90px; {border_css} border-radius: 8px; padding: 5px; text-align: center;'>
                             <div style='font-size:16px; font-weight:bold; color:{day_color};'>{day}</div>
                             <div style='display:flex; justify-content:center; flex-wrap:wrap; gap:2px;'>{flags}</div>
                         </div>
-                        <div class="cal-btn-marker"></div>
+                        <div class='cal-marker'></div>
                     """, unsafe_allow_html=True)
                     
-                    # 2. 사각칸 전체를 덮는 투명 유리막 버튼 (클릭을 감지하는 역할)
+                    # 2. 사각칸 위에 보이지 않게 덮어씌워지는 투명 클릭 버튼
                     if st.button("ㅤ", key=f"cal_btn_{sel_year}_{sel_month}_{day}", use_container_width=True):
                         st.session_state.daily_target_date = datetime(sel_year, sel_month, day).date()
                         st.rerun()
