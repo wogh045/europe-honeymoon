@@ -37,30 +37,56 @@ KNOWN_CITIES = {
     "두바이": (25.2048, 55.2708)
 }
 
-# --- 국가 코드 / 시간대를 하나의 표로 통합 관리 ---
-# (예전엔 get_country_code()의 매핑과 시간대 표가 따로 관리되어서
-#  그리스/오스트리아/체코처럼 한쪽에만 있는 국가는 국기가 안 뜨는 버그가 있었음)
-COUNTRY_INFO = {
-    "이탈리아": ("it", "한국 -7시간"), "italy": ("it", "한국 -7시간"),
-    "프랑스": ("fr", "한국 -7시간"), "france": ("fr", "한국 -7시간"),
-    "스페인": ("es", "한국 -7시간"), "spain": ("es", "한국 -7시간"),
-    "스위스": ("ch", "한국 -7시간"), "switzerland": ("ch", "한국 -7시간"),
-    "영국": ("gb", "한국 -8시간"), "uk": ("gb", "한국 -8시간"),
-    "독일": ("de", "한국 -7시간"), "germany": ("de", "한국 -7시간"),
-    "오스트리아": ("at", "한국 -7시간"), "austria": ("at", "한국 -7시간"),
-    "체코": ("cz", "한국 -7시간"), "czech": ("cz", "한국 -7시간"),
-    "그리스": ("gr", "한국 -6시간"), "greece": ("gr", "한국 -6시간"),
-    "아랍에미리트": ("ae", "한국 -5시간"), "아랍에미레이트": ("ae", "한국 -5시간"),
-    "두바이": ("ae", "한국 -5시간"), "uae": ("ae", "한국 -5시간"),
+# --- 국가 코드 / 시간대 ---
+# 자주 쓰는 나라는 하드코딩(빠르고 정확), 목록에 없는 나라는 지오코딩으로 자동 조회.
+# (지난번엔 하드코딩 목록에 없는 나라가 하나라도 섞이면 무조건 📍 이모지가 뜨는 게 진짜 원인이었음.
+#  이제는 목록에 없어도 자동으로 국가 코드를 찾아오므로 어떤 나라를 추가해도 국기가 뜬다)
+COUNTRY_CODE_HINTS = {
+    "이탈리아": "it", "italy": "it",
+    "프랑스": "fr", "france": "fr",
+    "스페인": "es", "spain": "es",
+    "스위스": "ch", "switzerland": "ch",
+    "영국": "gb", "uk": "gb",
+    "독일": "de", "germany": "de",
+    "오스트리아": "at", "austria": "at",
+    "체코": "cz", "czech": "cz",
+    "그리스": "gr", "greece": "gr",
+    "아랍에미리트": "ae", "아랍에미레이트": "ae", "두바이": "ae", "uae": "ae",
 }
 
-# --- 유틸리티 함수 ---
+TZ_BY_CODE = {
+    "it": "한국 -7시간", "fr": "한국 -7시간", "es": "한국 -7시간", "ch": "한국 -7시간",
+    "de": "한국 -7시간", "at": "한국 -7시간", "cz": "한국 -7시간", "gb": "한국 -8시간",
+    "gr": "한국 -6시간", "ae": "한국 -5시간",
+}
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def resolve_country_code(country_name):
+    """국가명 -> ISO 국가 코드. 하드코딩 표에 없는 나라는 지오코딩으로 자동 조회해서
+    유럽 어느 나라를 추가하든 국기가 나오게 한다. 결과는 24시간 캐시되어 재검색해도
+    다시 API를 부르지 않는다."""
+    name = str(country_name).strip()
+    if not name:
+        return None
+    key = re.sub(r'\s+', '', name.lower())
+    if key in COUNTRY_CODE_HINTS:
+        return COUNTRY_CODE_HINTS[key]
+    try:
+        loc = geocode_with_delay(name, addressdetails=True, language='en', exactly_one=True)
+        if loc:
+            code = loc.raw.get('address', {}).get('country_code')
+            if code:
+                return code.lower()
+    except (GeocoderTimedOut, GeocoderRateLimited):
+        pass
+    return None
+
 def get_country_info(name):
-    key = re.sub(r'\s+', '', str(name).lower())
-    return COUNTRY_INFO.get(key, (None, ""))
+    code = resolve_country_code(name)
+    return code, TZ_BY_CODE.get(code, "")
 
 def get_country_code(name):
-    return get_country_info(name)[0] or ""
+    return resolve_country_code(name) or ""
 
 def flag_tag(code, size=30):
     """국기 이미지 태그를 한 곳에서만 만들도록 통합 (기존엔 3곳에서 각자 문자열 조립)"""
