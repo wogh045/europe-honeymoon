@@ -18,7 +18,7 @@ st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
 # --- 지오코더 설정 및 캐싱 ---
-geolocator = Nominatim(user_agent="honeymoon_planner_v41", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v42", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -92,14 +92,13 @@ except Exception as e:
     st.error(f"데이터 연결 오류: {e}")
     st.stop()
 
-# --- [수정 핵심] 날짜 파싱 단일화 및 NaT 방어 ---
+# --- 날짜 파싱 단일화 ---
 city_ranges = []
 for _, row in df[df['카테고리'] == '도시'].iterrows():
     if row['시작일'] and row['종료일']:
         try:
             s_dt = pd.to_datetime(row['시작일'])
             e_dt = pd.to_datetime(row['종료일'])
-            # NaT(빈 날짜)가 아닐 때만 리스트에 추가하도록 철통 방어
             if pd.notna(s_dt) and pd.notna(e_dt):
                 city_ranges.append({
                     'country': row['국가'],
@@ -272,7 +271,7 @@ elif menu == "📅 체류 일정":
         </style>
     """, unsafe_allow_html=True)
     
-    # 국기 정보 사전 렌더링
+    # 1. 국기 스케줄 수집
     flag_schedule = {}
     for cr in city_ranges:
         code = COUNTRY_INFO.get(re.sub(r'\s+', '', str(cr['country']).lower()), {}).get("code", "")
@@ -287,6 +286,18 @@ elif menu == "📅 체류 일정":
                     flag_schedule[curr_dt.day] = flag_img
             curr_dt += timedelta(days=1)
 
+    # 2. [신규] 달력 메모 수집 (카테고리가 '메모'인 데이터)
+    memo_df = df[df['카테고리'] == '메모'].copy()
+    memo_schedule = {}
+    for _, row in memo_df.iterrows():
+        m_date = str(row.get('시작일', '')).strip()
+        if m_date:
+            try:
+                dt = pd.to_datetime(m_date).date()
+                if dt.year == sel_year and dt.month == sel_month:
+                    memo_schedule[dt.day] = str(row.get('장소명', ''))
+            except: pass
+
     # 요일 헤더
     h_cols = st.columns(7)
     days_title = [("일", "red"), ("월", "gray"), ("화", "gray"), ("수", "gray"), ("목", "gray"), ("금", "gray"), ("토", "blue")]
@@ -296,7 +307,7 @@ elif menu == "📅 체류 일정":
 
     cal = calendar.monthcalendar(sel_year, sel_month)
     
-    # 달력 본문
+    # 달력 본문 렌더링
     for week in cal:
         w_cols = st.columns(7)
         for i, day in enumerate(week):
@@ -308,12 +319,17 @@ elif menu == "📅 체류 일정":
                     day_color = "red" if i == 0 else "blue" if i == 6 else "black"
                     flags = flag_schedule.get(day, "<div style='height:36px;'></div>")
                     
+                    # [신규] 해당 날짜의 메모가 있으면 말풍선 디자인으로 렌더링
+                    daily_memo = memo_schedule.get(day, "")
+                    memo_html = f"<div style='font-size:11px; color:#555; background-color:rgba(0,0,0,0.03); border-radius:4px; padding:2px 4px; margin-top:4px; width:95%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;'>{daily_memo}</div>" if daily_memo else ""
+                    
                     border_css = "border: 2px solid #ff4b4b; background-color: rgba(255, 75, 75, 0.03);" if is_selected else "border: 1px solid rgba(128,128,128,0.2); background-color: white;"
                     
                     st.markdown(f"""
                         <div class='cal-cell' style='{border_css}'>
                             <div style='font-size:16px; font-weight:bold; color:{day_color};'>{day}</div>
                             <div style='display:flex; justify-content:center; flex-wrap:wrap; gap:2px; margin-top:2px;'>{flags}</div>
+                            {memo_html}
                         </div>
                     """, unsafe_allow_html=True)
                     
@@ -323,7 +339,9 @@ elif menu == "📅 체류 일정":
 
     st.write("---")
     
+    # ==========================================
     # [일일 상세 일정 네비게이터 & 타임라인]
+    # ==========================================
     target_date = st.session_state.daily_target_date
     weekday_kr = ["일", "월", "화", "수", "목", "금", "토"][target_date.weekday() if target_date.weekday() == 6 else target_date.weekday() + 1]
     if target_date.weekday() == 6: weekday_kr = "일"
@@ -341,7 +359,7 @@ elif menu == "📅 체류 일정":
     with nav_c2:
         st.markdown(f"<h3 style='text-align:center; margin:0;'>⏱️ {target_date.strftime('%Y년 %m월 %d일')} ({weekday_kr}) 상세 일정</h3>", unsafe_allow_html=True)
 
-    # 오버랩 렌더링 (에러 해결 핵심: city_ranges는 이미 유효한 date 객체만 가짐)
+    # 오버랩 렌더링
     overlapping_places = [cr for cr in city_ranges if cr['start'] <= target_date <= cr['end']]
     current_country, current_city = "", ""
     
@@ -366,6 +384,11 @@ elif menu == "📅 체류 일정":
         current_country, current_city = " / ".join(c_names), " / ".join(city_names)
     else:
         st.warning("선택하신 날짜에는 등록된 체류 도시가 없습니다. 아래 [체류 기간 설정]에서 날짜를 지정해보세요.")
+
+    # [신규] 달력 메모 입력 UI
+    existing_memo_row = df[(df['카테고리'] == '메모') & (df['시작일'] == str(target_date))]
+    existing_memo = str(existing_memo_row.iloc[0]['장소명']) if not existing_memo_row.empty else ""
+    daily_memo_input = st.text_input("📌 달력 메모 (달력 칸에 표시됩니다)", value=existing_memo, placeholder="예: 바르셀로나 이동! 소매치기 조심", key=f"memo_{target_date}")
 
     saved_schedule = df[(df['카테고리'] == '일정') & (df['시작일'] == str(target_date))]
     times = [f"{str(h).zfill(2)}:{str(m).zfill(2)}" for h in range(24) for m in (0, 30)]
@@ -401,10 +424,13 @@ elif menu == "📅 체류 일정":
     
     if st.button("💾 일일 상세 일정 및 비용 저장", type="primary", use_container_width=True, key=f"save_daily_btn_{target_date}"):
         try:
-            to_save = edited_daily[(edited_daily["계획 일정"].str.strip() != "") | (edited_daily["계획 지출액"] > 0) | (edited_daily["실제 방문"].str.strip() != "") | (edited_daily["실제 지출액"] > 0)]
-            new_main_df = df[~((df["카테고리"] == "일정") & (df["시작일"] == str(target_date)))].copy()
+            # 기존의 해당 날짜 '일정'과 '메모'를 모두 삭제하여 덮어쓸 준비
+            new_main_df = df[~((df["카테고리"].isin(["일정", "메모"])) & (df["시작일"] == str(target_date)))].copy()
             
             append_list = []
+            
+            # 타임라인 일정 저장
+            to_save = edited_daily[(edited_daily["계획 일정"].str.strip() != "") | (edited_daily["계획 지출액"] > 0) | (edited_daily["실제 방문"].str.strip() != "") | (edited_daily["실제 지출액"] > 0)]
             for _, r in to_save.iterrows():
                 append_list.append({
                     "국가": current_country, "도시": current_city,
@@ -413,7 +439,20 @@ elif menu == "📅 체류 일정":
                     "실제 일정": r["실제 방문"], "실제 비용": r["실제 지출액"],
                     "총 예산": df["총 예산"].max() if not df.empty else 0
                 })
-            if append_list: new_main_df = pd.concat([new_main_df, pd.DataFrame(append_list)], ignore_index=True)
+            
+            # [신규] 메모 저장
+            if daily_memo_input.strip():
+                append_list.append({
+                    "국가": current_country, "도시": current_city,
+                    "장소명": daily_memo_input.strip(), 
+                    "카테고리": "메모", "시작일": str(target_date),
+                    "시간": "", "계획 비용": 0, "실제 일정": "", "실제 비용": 0,
+                    "총 예산": df["총 예산"].max() if not df.empty else 0
+                })
+
+            if append_list: 
+                new_main_df = pd.concat([new_main_df, pd.DataFrame(append_list)], ignore_index=True)
+            
             conn.update(spreadsheet=SHEET_URL, data=new_main_df)
             st.success(f"{target_date.strftime('%m월 %d일')} 일정이 성공적으로 저장되었습니다!")
             st.cache_data.clear(); st.rerun()
