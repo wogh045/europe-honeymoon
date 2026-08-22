@@ -18,7 +18,7 @@ st.set_page_config(page_title="🛫", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1jUe_li1kObxdCQ_Xp62AlOOFEzTCcG48srKqam8hTc4/edit"
 
 # --- 지오코더 설정 및 캐싱 ---
-geolocator = Nominatim(user_agent="honeymoon_planner_v40", timeout=10)
+geolocator = Nominatim(user_agent="honeymoon_planner_v41", timeout=10)
 geocode_with_delay = RateLimiter(geolocator.geocode, min_delay_seconds=1.5)
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -92,17 +92,21 @@ except Exception as e:
     st.error(f"데이터 연결 오류: {e}")
     st.stop()
 
-# --- 날짜 파싱 단일화 ---
+# --- [수정 핵심] 날짜 파싱 단일화 및 NaT 방어 ---
 city_ranges = []
 for _, row in df[df['카테고리'] == '도시'].iterrows():
     if row['시작일'] and row['종료일']:
         try:
-            city_ranges.append({
-                'country': row['국가'],
-                'city': row['도시'],
-                'start': pd.to_datetime(row['시작일']).date(),
-                'end': pd.to_datetime(row['종료일']).date()
-            })
+            s_dt = pd.to_datetime(row['시작일'])
+            e_dt = pd.to_datetime(row['종료일'])
+            # NaT(빈 날짜)가 아닐 때만 리스트에 추가하도록 철통 방어
+            if pd.notna(s_dt) and pd.notna(e_dt):
+                city_ranges.append({
+                    'country': row['국가'],
+                    'city': row['도시'],
+                    'start': s_dt.date(),
+                    'end': e_dt.date()
+                })
         except: pass
 
 # --- 메인 UI ---
@@ -216,7 +220,7 @@ if menu == "📍 방문 예정지":
                 st.cache_data.clear(); st.rerun()
 
 # ==========================================
-# [화면 2] 체류 일정 (먹통 방지 안전 클릭 달력)
+# [화면 2] 체류 일정
 # ==========================================
 elif menu == "📅 체류 일정":
     cal_c1, cal_c2, _ = st.columns([1, 1, 8])
@@ -224,10 +228,9 @@ elif menu == "📅 체류 일정":
     with cal_c2: sel_month = st.selectbox("월", list(range(1, 13)), index=3, key="cal_month") # 4월 기본 지정
     st.write("---")
 
-    # [핵심 수술] Column 전체를 마비시키는 코드를 버리고, 오직 '버튼 하나'만 살짝 위로 올려 덮는 가장 안전한 방식 도입!
+    # 투명 클릭 오버레이 CSS
     st.markdown("""
         <style>
-        /* HTML로 그리는 사각칸의 높이를 무조건 100px로 고정합니다. */
         .cal-cell {
             height: 100px;
             border-radius: 8px;
@@ -238,8 +241,6 @@ elif menu == "📅 체류 일정":
             flex-direction: column;
             align-items: center;
         }
-        
-        /* 버튼을 감싸는 기본 컨테이너가 공간을 차지하지 않도록 높이를 0으로 만듭니다. */
         div.element-container:has(button[title="cal_click"]) {
             position: relative !important;
             height: 0px !important;
@@ -248,8 +249,6 @@ elif menu == "📅 체류 일정":
             padding: 0 !important;
             z-index: 10 !important;
         }
-        
-        /* 투명 버튼을 카드 위로 정확히 112px만큼 당겨 올려서 완벽하게 포갭니다. */
         button[title="cal_click"] {
             position: absolute !important;
             top: -112px !important;
@@ -262,15 +261,11 @@ elif menu == "📅 체류 일정":
             box-shadow: none !important;
             cursor: pointer !important;
         }
-        
-        /* 버튼에 마우스를 올리거나 클릭하면 빨간 테두리 효과 발생! */
         button[title="cal_click"]:hover {
             border: 2px solid #ff4b4b !important;
             background-color: rgba(255, 75, 75, 0.05) !important;
             border-radius: 8px !important;
         }
-        
-        /* 못생긴 스트림릿 버튼 글자 원천 차단 */
         button[title="cal_click"] p {
             display: none !important;
         }
@@ -307,14 +302,12 @@ elif menu == "📅 체류 일정":
         for i, day in enumerate(week):
             with w_cols[i]:
                 if day == 0:
-                    # 일정이 없는 빈 날짜 칸
                     st.markdown("<div class='cal-cell' style='background-color: #f9f9f9;'></div>", unsafe_allow_html=True)
                 else:
                     is_selected = (st.session_state.daily_target_date == datetime(sel_year, sel_month, day).date())
                     day_color = "red" if i == 0 else "blue" if i == 6 else "black"
                     flags = flag_schedule.get(day, "<div style='height:36px;'></div>")
                     
-                    # 오리지널 예쁜 사각 디자인 + 선택 시 빨간 테두리!
                     border_css = "border: 2px solid #ff4b4b; background-color: rgba(255, 75, 75, 0.03);" if is_selected else "border: 1px solid rgba(128,128,128,0.2); background-color: white;"
                     
                     st.markdown(f"""
@@ -324,7 +317,6 @@ elif menu == "📅 체류 일정":
                         </div>
                     """, unsafe_allow_html=True)
                     
-                    # 마법의 투명 버튼 (클릭 감지기)
                     if st.button("ㅤ", help="cal_click", key=f"cal_btn_{sel_year}_{sel_month}_{day}", use_container_width=True):
                         st.session_state.daily_target_date = datetime(sel_year, sel_month, day).date()
                         st.rerun()
@@ -349,7 +341,7 @@ elif menu == "📅 체류 일정":
     with nav_c2:
         st.markdown(f"<h3 style='text-align:center; margin:0;'>⏱️ {target_date.strftime('%Y년 %m월 %d일')} ({weekday_kr}) 상세 일정</h3>", unsafe_allow_html=True)
 
-    # 오버랩 렌더링
+    # 오버랩 렌더링 (에러 해결 핵심: city_ranges는 이미 유효한 date 객체만 가짐)
     overlapping_places = [cr for cr in city_ranges if cr['start'] <= target_date <= cr['end']]
     current_country, current_city = "", ""
     
